@@ -1,0 +1,21 @@
+kind: RuntimePolicy
+apiVersion: forge.kernloom.io/v1alpha1
+
+metadata:
+  id: block-critical-pps-source
+  description: Block a source whose anomaly severity is critical.
+
+when:
+  language: cel
+  expression: >
+    signals.anomaly.state.severity == "critical" &&
+    has(signals.network.entity.src_ip)
+
+then:
+  - type: capability_action
+    capability: enforce.network.deny
+    target:
+      granularity: src_ip
+      value_from: signals.network.entity.src_ip
+    ttl: 30m
+    reason: critical_network_anomaly

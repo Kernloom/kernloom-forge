@@ -1,0 +1,225 @@
+capabilities:
+  # ── Observe ──────────────────────────────────────────────────────────────────
+
+  - id: observe.network.packet_summary
+    category: observe
+    domain: network
+    allowed_adapter_types: [pep, sensor]
+    produces_signals:
+      - network.metric.packets_per_second
+      - network.metric.bytes_per_second
+      - network.metric.syn_per_second
+      - network.metric.drop_count
+    risk_class: safe
+
+  - id: observe.network.connection_attempt
+    category: observe
+    domain: network
+    allowed_adapter_types: [pep, sensor]
+    produces_signals:
+      - network.metric.packets_per_second
+      - network.entity.src_ip
+      - network.entity.dst_ip
+      - network.entity.dst_port
+      - network.entity.protocol
+    risk_class: safe
+
+  # ── Enforce Network ───────────────────────────────────────────────────────────
+
+  - id: enforce.network.allow
+    category: enforce
+    domain: network
+    allowed_adapter_types: [pep]
+    allowed_granularities: [src_ip, dst_ip, src_cidr, dst_cidr, dst_port, protocol, tuple_5]
+    supports_ttl: false
+    supports_dry_run: true
+    risk_class: privilege_granting
+
+  - id: enforce.network.deny
+    category: enforce
+    domain: network
+    allowed_adapter_types: [pep]
+    allowed_granularities: [src_ip, dst_ip, src_cidr, dst_cidr, dst_port, protocol, tuple_5]
+    supports_ttl: true
+    supports_dry_run: true
+    risk_class: disruptive
+
+  - id: enforce.network.default_deny
+    category: enforce
+    domain: network
+    allowed_adapter_types: [pep]
+    allowed_granularities: [interface, direction, dst_port, protocol, tuple_5]
+    supports_ttl: false
+    supports_dry_run: true
+    risk_class: disruptive
+
+  - id: enforce.network.rate_limit
+    category: enforce
+    domain: network
+    allowed_adapter_types: [pep]
+    allowed_granularities: [src_ip, dst_ip, dst_port, tuple_5]
+    supports_ttl: true
+    supports_dry_run: true
+    risk_class: disruptive
+
+  - id: enforce.network.quarantine
+    category: enforce
+    domain: network
+    allowed_adapter_types: [pep]
+    allowed_granularities: [src_ip, src_cidr, node_id]
+    supports_ttl: true
+    supports_dry_run: true
+    risk_class: disruptive
+
+  - id: enforce.network.syn_protect
+    category: enforce
+    domain: network
+    allowed_adapter_types: [pep]
+    allowed_granularities: [global, interface, src_ip]
+    supports_ttl: true
+    supports_dry_run: true
+    risk_class: disruptive
+
+  # ── Analyze ───────────────────────────────────────────────────────────────────
+
+  - id: analyze.baseline.learn
+    category: analyze
+    domain: baseline
+    allowed_adapter_types: [analyzer, pdp]
+    risk_class: safe
+
+  - id: analyze.anomaly.score
+    category: analyze
+    domain: anomaly
+    allowed_adapter_types: [analyzer, pdp]
+    produces_signals:
+      - anomaly.score.combined
+      - anomaly.state.severity
+      - anomaly.state.confidence
+    risk_class: safe
+
+  - id: analyze.relation.learn
+    category: analyze
+    domain: relation
+    allowed_adapter_types: [analyzer, graph_engine]
+    produces_signals:
+      - relation.state.known
+      - relation.state.confidence
+      - relation.state.lifecycle
+    risk_class: safe
+
+  - id: analyze.relation.freeze
+    category: analyze
+    domain: relation
+    allowed_adapter_types: [analyzer, graph_engine]
+    risk_class: privilege_granting
+
+  - id: analyze.relation.export_allowlist
+    category: analyze
+    domain: relation
+    allowed_adapter_types: [analyzer, graph_engine]
+    risk_class: privilege_granting
+
+  # ── Enforce Overlay ──────────────────────────────────────────────────────────
+  # Overlay capabilities are defined here for completeness of the Kernloom
+  # language; no adapter implements them yet in Phase 1.
+
+  - id: enforce.overlay.service_allow
+    category: enforce
+    domain: overlay
+    allowed_adapter_types: [overlay_controller]
+    allowed_granularities: [overlay_identity, overlay_service]
+    supports_ttl: false
+    supports_dry_run: true
+    risk_class: privilege_granting
+
+  - id: enforce.overlay.service_deny
+    category: enforce
+    domain: overlay
+    allowed_adapter_types: [overlay_controller]
+    allowed_granularities: [overlay_identity, overlay_service]
+    supports_ttl: true
+    supports_dry_run: true
+    risk_class: disruptive
+
+  - id: enforce.overlay.default_deny
+    category: enforce
+    domain: overlay
+    allowed_adapter_types: [overlay_controller]
+    allowed_granularities: [overlay_identity, overlay_service]
+    supports_ttl: false
+    supports_dry_run: true
+    risk_class: disruptive
+
+  - id: enforce.overlay.identity_allow
+    category: enforce
+    domain: overlay
+    allowed_adapter_types: [overlay_controller]
+    allowed_granularities: [overlay_identity]
+    supports_ttl: false
+    supports_dry_run: true
+    risk_class: privilege_granting
+
+  - id: enforce.overlay.identity_deny
+    category: enforce
+    domain: overlay
+    allowed_adapter_types: [overlay_controller]
+    allowed_granularities: [overlay_identity]
+    supports_ttl: true
+    supports_dry_run: true
+    risk_class: disruptive
+
+  # ── Enforce App ───────────────────────────────────────────────────────────────
+
+  - id: enforce.app.allow
+    category: enforce
+    domain: app
+    allowed_adapter_types: [app_gateway]
+    allowed_granularities: [subject_id, route, service_id]
+    supports_ttl: false
+    supports_dry_run: true
+    risk_class: privilege_granting
+
+  - id: enforce.app.deny
+    category: enforce
+    domain: app
+    allowed_adapter_types: [app_gateway]
+    allowed_granularities: [subject_id, route, service_id]
+    supports_ttl: true
+    supports_dry_run: true
+    risk_class: disruptive
+
+  - id: enforce.app.default_deny
+    category: enforce
+    domain: app
+    allowed_adapter_types: [app_gateway]
+    allowed_granularities: [subject_id, service_id]
+    supports_ttl: false
+    supports_dry_run: true
+    risk_class: disruptive
+
+  # ── Export / Sink ─────────────────────────────────────────────────────────────
+
+  - id: export.event
+    category: export
+    domain: event
+    allowed_adapter_types: [sink, pdp]
+    risk_class: safe
+
+  - id: sink.webhook
+    category: sink
+    domain: event
+    allowed_adapter_types: [sink]
+    risk_class: safe
+
+  - id: sink.smtp
+    category: sink
+    domain: event
+    allowed_adapter_types: [sink]
+    risk_class: safe
+
+  - id: sink.correlate
+    category: sink
+    domain: event
+    allowed_adapter_types: [sink, pdp]
+    risk_class: safe

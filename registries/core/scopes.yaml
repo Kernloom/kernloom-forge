@@ -1,0 +1,15 @@
+scopes:
+  - id: global
+  - id: interface
+  - id: src_ip
+  - id: dst_ip
+  - id: dst_port
+  - id: tuple_5
+  - id: node_id
+  - id: adapter_id
+  - id: service_id
+  - id: identity_id
+  - id: subject_id
+  - id: relation
+  - id: asset_id
+  - id: policy_id

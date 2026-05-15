@@ -1,0 +1,42 @@
+kind: AdapterManifest
+apiVersion: forge.kernloom.io/v1alpha1
+
+metadata:
+  id: klshield
+  version: 0.2.3
+
+adapter:
+  id: klshield
+  types:
+    - pep
+    - sensor
+
+capabilities:
+  - id: observe.network.packet_summary
+    scopes: [interface, src_ip]
+
+  - id: observe.network.connection_attempt
+    scopes: [src_ip, tuple_5]
+
+  - id: enforce.network.deny
+    granularity: [src_ip, dst_ip, dst_port, protocol, tuple_5]
+    supports_ttl: true
+
+  - id: enforce.network.rate_limit
+    granularity: [src_ip]
+    supports_ttl: true
+
+  - id: enforce.network.default_deny
+    granularity: [interface, direction]
+
+signals_produced:
+  - network.entity.src_ip
+  - network.entity.dst_ip
+  - network.entity.dst_port
+  - network.entity.protocol
+  - network.metric.packets_per_second
+  - network.metric.bytes_per_second
+  - network.metric.syn_per_second
+  - network.metric.drop_count
+  - network.metric.rate_limit_hit_count
+  - enforcement.state.action

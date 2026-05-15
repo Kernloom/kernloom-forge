@@ -1,0 +1,76 @@
+intents:
+  - id: access.relation.allow
+    domain: access
+    description: Allow a logical entity to communicate with another.
+    inputs:
+      required: [src, dst]
+      optional: [protocol, port, constraints]
+    risk_class: privilege_granting
+    default_requires_approval: true
+    compiles_to:
+      - enforce.network.allow
+      - enforce.overlay.service_allow
+      - enforce.app.allow
+
+  - id: access.relation.default_deny
+    domain: access
+    description: Deny unknown relations unless explicitly allowed.
+    inputs:
+      required: [target]
+      optional: [exceptions]
+    risk_class: disruptive
+    default_requires_approval: false
+    compiles_to:
+      - enforce.network.default_deny
+      - enforce.overlay.default_deny
+      - enforce.app.default_deny
+
+  - id: protection.source.quarantine
+    domain: protection
+    description: Isolate or restrict a suspicious source.
+    inputs:
+      required: [source]
+      optional: [ttl, reason]
+    risk_class: disruptive
+    default_requires_approval: false
+    compiles_to:
+      - enforce.network.deny
+      - enforce.network.rate_limit
+      - enforce.overlay.identity_deny
+      - enforce.app.deny
+
+  - id: protection.dos.prevent
+    domain: protection
+    description: Prevent volumetric or connection-rate based abuse.
+    inputs:
+      required: [target]
+      optional: [thresholds, ttl]
+    risk_class: disruptive
+    default_requires_approval: false
+    compiles_to:
+      - enforce.network.rate_limit
+      - enforce.network.syn_protect
+      - enforce.network.deny
+
+  - id: microsegmentation.learn
+    domain: microsegmentation
+    description: Learn normal communication relations between entities.
+    inputs:
+      required: [scope]
+      optional: [duration, confidence]
+    risk_class: safe
+    default_requires_approval: false
+    compiles_to:
+      - analyze.relation.learn
+
+  - id: microsegmentation.freeze
+    domain: microsegmentation
+    description: Freeze learned relations into a stable baseline.
+    inputs:
+      required: [scope]
+      optional: [approval_required]
+    risk_class: privilege_granting
+    default_requires_approval: true
+    compiles_to:
+      - analyze.relation.freeze
+      - analyze.relation.export_allowlist

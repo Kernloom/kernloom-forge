@@ -1,0 +1,151 @@
+signals:
+  # ── Network Entities ──────────────────────────────────────────────────────────
+
+  - id: network.entity.src_ip
+    domain: network
+    type: entity
+    unit: string
+    allowed_scopes: [src_ip, tuple_5]
+    allowed_producers: [pep, sensor]
+
+  - id: network.entity.dst_ip
+    domain: network
+    type: entity
+    unit: string
+    allowed_scopes: [dst_ip, tuple_5]
+    allowed_producers: [pep, sensor]
+
+  - id: network.entity.dst_port
+    domain: network
+    type: entity
+    unit: integer
+    allowed_scopes: [dst_port, tuple_5]
+    allowed_producers: [pep, sensor]
+
+  - id: network.entity.protocol
+    domain: network
+    type: entity
+    unit: enum
+    allowed_values: [tcp, udp, icmp, other]
+    allowed_scopes: [tuple_5, global]
+    allowed_producers: [pep, sensor]
+
+  # ── Network Metrics ───────────────────────────────────────────────────────────
+
+  - id: network.metric.packets_per_second
+    domain: network
+    type: metric
+    unit: pps
+    allowed_scopes: [global, interface, src_ip, dst_ip, tuple_5]
+    allowed_producers: [pep, sensor]
+    aggregation: [sum, max, avg]
+
+  - id: network.metric.bytes_per_second
+    domain: network
+    type: metric
+    unit: bps
+    allowed_scopes: [global, interface, src_ip, dst_ip, tuple_5]
+    allowed_producers: [pep, sensor]
+    aggregation: [sum, max, avg]
+
+  - id: network.metric.syn_per_second
+    domain: network
+    type: metric
+    unit: pps
+    allowed_scopes: [global, interface, src_ip, tuple_5]
+    allowed_producers: [pep, sensor]
+    aggregation: [sum, max]
+
+  - id: network.metric.drop_count
+    domain: network
+    type: metric
+    unit: count
+    allowed_scopes: [global, interface, src_ip, tuple_5]
+    allowed_producers: [pep, sensor]
+    aggregation: [sum]
+
+  - id: network.metric.rate_limit_hit_count
+    domain: network
+    type: metric
+    unit: count
+    allowed_scopes: [global, interface, src_ip, tuple_5]
+    allowed_producers: [pep]
+    aggregation: [sum]
+
+  # ── Anomaly ───────────────────────────────────────────────────────────────────
+
+  - id: anomaly.score.combined
+    domain: anomaly
+    type: score
+    unit: score
+    range: [0, 1]
+    allowed_scopes: [global, src_ip, node_id, relation]
+    allowed_producers: [pdp, analyzer]
+
+  - id: anomaly.state.severity
+    domain: anomaly
+    type: state
+    unit: enum
+    allowed_values: [info, low, medium, high, critical]
+    allowed_scopes: [global, src_ip, node_id, relation]
+    allowed_producers: [pdp, analyzer]
+
+  - id: anomaly.state.confidence
+    domain: anomaly
+    type: score
+    unit: score
+    range: [0, 1]
+    allowed_scopes: [global, src_ip, node_id, relation]
+    allowed_producers: [pdp, analyzer]
+
+  # ── Relation ──────────────────────────────────────────────────────────────────
+
+  - id: relation.state.known
+    domain: relation
+    type: state
+    unit: boolean
+    allowed_scopes: [relation]
+    allowed_producers: [graph_engine, analyzer, pdp]
+
+  - id: relation.state.approved
+    domain: relation
+    type: state
+    unit: boolean
+    allowed_scopes: [relation]
+    allowed_producers: [graph_engine, analyzer, pdp]
+
+  - id: relation.state.confidence
+    domain: relation
+    type: score
+    unit: score
+    range: [0, 1]
+    allowed_scopes: [relation]
+    allowed_producers: [graph_engine, analyzer]
+
+  - id: relation.state.lifecycle
+    domain: relation
+    type: state
+    unit: enum
+    allowed_values: [candidate, learned, approved, frozen, denied, expired]
+    allowed_scopes: [relation]
+    allowed_producers: [graph_engine, analyzer]
+
+  # ── Risk ──────────────────────────────────────────────────────────────────────
+
+  - id: risk.local.score
+    domain: risk
+    type: score
+    unit: score
+    range: [0, 100]
+    allowed_scopes: [global, src_ip, node_id, relation]
+    allowed_producers: [pdp, analyzer]
+
+  # ── Enforcement ───────────────────────────────────────────────────────────────
+
+  - id: enforcement.state.action
+    domain: enforcement
+    type: state
+    unit: enum
+    allowed_values: [none, log, allow, deny, rate_limit, quarantine, default_deny]
+    allowed_scopes: [global, src_ip, tuple_5, relation]
+    allowed_producers: [pdp, pep]

@@ -1,0 +1,84 @@
+compiler_rules:
+  - id: compile.access.relation.allow
+    intent: access.relation.allow
+    targets:
+      - capability: enforce.network.allow
+        domain: network
+        required_granularity: [tuple_5]
+        priority: 10
+        when:
+          relation_type: network_tuple
+
+      - capability: enforce.overlay.service_allow
+        domain: overlay
+        required_granularity: [overlay_identity, overlay_service]
+        priority: 20
+        when:
+          relation_type: identity_service
+
+      - capability: enforce.app.allow
+        domain: app
+        required_granularity: [subject_id, route]
+        priority: 30
+        when:
+          relation_type: subject_app
+
+  - id: compile.access.relation.default_deny
+    intent: access.relation.default_deny
+    targets:
+      - capability: enforce.network.default_deny
+        domain: network
+        required_granularity: [interface, direction]
+        priority: 10
+
+  - id: compile.protection.source.quarantine
+    intent: protection.source.quarantine
+    targets:
+      - capability: enforce.network.deny
+        domain: network
+        required_granularity: [src_ip]
+        priority: 10
+
+      - capability: enforce.network.rate_limit
+        domain: network
+        required_granularity: [src_ip]
+        priority: 20
+
+  - id: compile.protection.dos.prevent
+    intent: protection.dos.prevent
+    targets:
+      - capability: enforce.network.rate_limit
+        domain: network
+        required_granularity: [src_ip]
+        priority: 10
+
+      - capability: enforce.network.syn_protect
+        domain: network
+        required_granularity: [global, src_ip]
+        priority: 20
+
+      - capability: enforce.network.deny
+        domain: network
+        required_granularity: [src_ip]
+        priority: 30
+
+  - id: compile.microsegmentation.learn
+    intent: microsegmentation.learn
+    targets:
+      - capability: analyze.relation.learn
+        domain: relation
+        required_granularity: [relation]
+        priority: 10
+
+  - id: compile.microsegmentation.freeze
+    intent: microsegmentation.freeze
+    targets:
+      - capability: analyze.relation.freeze
+        domain: relation
+        required_granularity: [relation]
+        priority: 10
+
+      - capability: analyze.relation.export_allowlist
+        domain: relation
+        required_granularity: [relation]
+        priority: 20
