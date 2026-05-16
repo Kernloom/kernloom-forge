@@ -25,10 +25,11 @@ vendor/
 *.sqlite
 *.sqlite3
 
-# Pack outputs and signing artefacts
-*.pack.yaml
+# Pack outputs and signing artefacts (generated, not committed)
 *.signed.yaml
 *.sig
+# Exception: curated example packs in examples/packs/ are committed as documentation
+dist/*.pack.yaml
 
 # Editor and OS artifacts
 .DS_Store

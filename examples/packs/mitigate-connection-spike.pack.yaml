@@ -1,0 +1,27 @@
+apiVersion: kernloom.io/v1alpha1
+kind: LocalPolicyPack
+metadata:
+    name: mitigate-src-connection-spike
+    description: |
+        Rate-limit a source IP when its current connection rate exceeds the learned per-source baseline. Falls back to the global baseline when the per-source model is not yet stable enough.
+    labels:
+        forge.intent: protection.abuse.mitigate
+        forge.policy_id: mitigate-src-connection-spike
+spec:
+    capabilities_required:
+        - enforce.traffic.rate_limit
+    autonomy:
+        dry_run: false
+        max_action: rate_limit
+        allow_local_block: false
+    rules:
+        - name: forge-mitigate-src-connection-spike-enforce-traffic-rate-limit
+          when:
+            fsm_level: soft
+          then:
+            action: rate_limit
+            capability: enforce.traffic.rate_limit
+            ttl: 10m
+            params:
+                rate: adaptive
+                ttl: 10m
