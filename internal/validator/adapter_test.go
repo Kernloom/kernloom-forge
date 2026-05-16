@@ -29,17 +29,17 @@ func examplesDir(t *testing.T) string {
 	return filepath.Join(filepath.Dir(file), "..", "..", "examples")
 }
 
-func TestKLShieldManifestValid(t *testing.T) {
+func TestL3L4XDPFilterDefinitionValid(t *testing.T) {
 	reg := loadTestRegistry(t)
-	path := filepath.Join(examplesDir(t), "adapters", "klshield.manifest.yaml")
+	path := filepath.Join(examplesDir(t), "nodes", "l3l4-xdp-filter.yaml")
 	if err := validator.ValidateAdapterFile(path, reg); err != nil {
-		t.Errorf("klshield manifest should be valid: %v", err)
+		t.Errorf("l3l4-xdp-filter node definition should be valid: %v", err)
 	}
 }
 
 func TestFakePEPWithUnknownCapabilityRejected(t *testing.T) {
 	reg := loadTestRegistry(t)
-	m := &validator.AdapterManifest{}
+	m := &validator.NodeDefinition{}
 	m.Metadata.ID = "fake-pep"
 	m.Adapter.Types = []string{"pep"}
 	m.Capabilities = []validator.AdapterCapability{
@@ -52,8 +52,8 @@ func TestFakePEPWithUnknownCapabilityRejected(t *testing.T) {
 
 func TestAdapterWithWrongTypeForCapabilityRejected(t *testing.T) {
 	reg := loadTestRegistry(t)
-	// analyze.relation.learn is only allowed for analyzer/graph_engine, not pep.
-	m := &validator.AdapterManifest{}
+	// analyze.relation.learn is only allowed for analyzer, not pep.
+	m := &validator.NodeDefinition{}
 	m.Metadata.ID = "bad-pep"
 	m.Adapter.Types = []string{"pep"}
 	m.Capabilities = []validator.AdapterCapability{
@@ -66,7 +66,7 @@ func TestAdapterWithWrongTypeForCapabilityRejected(t *testing.T) {
 
 func TestExtensionCapabilityRejectedInStrictMode(t *testing.T) {
 	reg := loadTestRegistry(t)
-	m := &validator.AdapterManifest{}
+	m := &validator.NodeDefinition{}
 	m.Metadata.ID = "ext-adapter"
 	m.Adapter.Types = []string{"sensor"}
 	m.Capabilities = []validator.AdapterCapability{
@@ -79,7 +79,7 @@ func TestExtensionCapabilityRejectedInStrictMode(t *testing.T) {
 
 func TestUnknownSignalProducedRejected(t *testing.T) {
 	reg := loadTestRegistry(t)
-	m := &validator.AdapterManifest{}
+	m := &validator.NodeDefinition{}
 	m.Metadata.ID = "bad-sensor"
 	m.Adapter.Types = []string{"sensor"}
 	m.SignalsProduced = []string{"x.fake.unknown_signal"}

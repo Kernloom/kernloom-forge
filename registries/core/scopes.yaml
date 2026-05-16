@@ -1,15 +1,23 @@
 scopes:
   - id: global
   - id: interface
+  - id: interface_id
+  - id: listener_id
   - id: src_ip
   - id: dst_ip
   - id: dst_port
   - id: tuple_5
+  - id: flow_id
+  - id: connection_id
   - id: node_id
+  - id: workload_id
   - id: adapter_id
   - id: service_id
+  - id: service_instance_id
   - id: identity_id
   - id: subject_id
   - id: relation
+  - id: relation_id
   - id: asset_id
   - id: policy_id
+  - id: tenant_id

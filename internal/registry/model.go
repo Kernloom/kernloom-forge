@@ -16,10 +16,10 @@ type Intent struct {
 
 // Capability represents a technical enforcement or observation ability.
 type Capability struct {
-	ID                   string   `yaml:"id"`
-	Category             string   `yaml:"category"`
-	Domain               string   `yaml:"domain"`
-	AllowedAdapterTypes  []string `yaml:"allowed_adapter_types"`
+	ID           string   `yaml:"id"`
+	Category     string   `yaml:"category"`
+	Domain       string   `yaml:"domain"`
+	AllowedRoles []string `yaml:"allowed_roles"` // references ComponentRole IDs
 	AllowedGranularities []string `yaml:"allowed_granularities"`
 	ProducesSignals      []string `yaml:"produces_signals"`
 	SupportsTTL          bool     `yaml:"supports_ttl"`
@@ -34,27 +34,59 @@ type Signal struct {
 	Type             string    `yaml:"type"`
 	Unit             string    `yaml:"unit"`
 	AllowedScopes    []string  `yaml:"allowed_scopes"`
-	AllowedProducers []string  `yaml:"allowed_producers"`
+	AllowedProducers []string  `yaml:"allowed_producers"` // references ComponentRole IDs
 	AllowedValues    []string  `yaml:"allowed_values"`
 	Aggregation      []string  `yaml:"aggregation"`
 	Range            []float64 `yaml:"range"`
 }
 
-// Granularity describes the precision level at which a capability can be applied.
+// Granularity describes the precision level at which a capability can be applied or observed.
 type Granularity struct {
-	ID string `yaml:"id"`
+	ID    string `yaml:"id"`
+	Group string `yaml:"group"`
 }
 
-// Scope describes the context to which a signal refers.
+// Scope describes the context to which a signal refers (aggregation / learning dimension).
 type Scope struct {
 	ID string `yaml:"id"`
 }
 
-// AdapterType defines a class of adapter and its allowed capability prefixes.
-type AdapterType struct {
-	ID                        string   `yaml:"id"`
-	Description               string   `yaml:"description"`
-	AllowedCapabilityPrefixes []string `yaml:"allowed_capability_prefixes"`
+// ComponentRole defines a pure functional role of a component in the policy system.
+// Roles describe WHAT a component does, not HOW it is implemented.
+type ComponentRole struct {
+	ID          string `yaml:"id"`
+	Description string `yaml:"description"`
+}
+
+// ComponentProfile is a technical template that describes where and how a component
+// operates. Profiles describe HOW the component works technically.
+// Distinct from ComponentRole (what it does) and NodeDefinition (concrete instance).
+type ComponentProfile struct {
+	ID                        string         `yaml:"id"`
+	Description               string         `yaml:"description"`
+	TypicalRoles              []string       `yaml:"typical_roles"`
+	Layers                    []string       `yaml:"layers"`
+	AllowedCapabilityPrefixes []string       `yaml:"allowed_capability_prefixes"`
+	DefaultConstraints        map[string]any `yaml:"default_constraints"`
+}
+
+// BaselineStatistic is a standardised output field produced by an analyzer.
+// Forge standardises the name; components decide the computation internally.
+type BaselineStatistic struct {
+	ID            string    `yaml:"id"`
+	Description   string    `yaml:"description"`
+	ValueType     string    `yaml:"value_type"`
+	Unit          string    `yaml:"unit"`
+	AllowedValues []string  `yaml:"allowed_values"`
+	Range         []float64 `yaml:"range"`
+}
+
+// SelectionTraitDefinition defines a single compiler-scoring dimension and its
+// allowed enumeration values.
+type SelectionTraitDefinition struct {
+	ID            string   `yaml:"id"`
+	Description   string   `yaml:"description"`
+	AllowedValues []string `yaml:"allowed_values"`
 }
 
 // CompilerRuleTarget is one possible output capability for a compiler rule.
@@ -75,13 +107,16 @@ type CompilerRule struct {
 
 // Registry is the fully loaded and indexed core registry.
 type Registry struct {
-	Intents       map[string]*Intent
-	Capabilities  map[string]*Capability
-	Signals       map[string]*Signal
-	Granularities map[string]*Granularity
-	Scopes        map[string]*Scope
-	AdapterTypes  map[string]*AdapterType
-	CompilerRules map[string]*CompilerRule
+	Intents            map[string]*Intent
+	Capabilities       map[string]*Capability
+	Signals            map[string]*Signal
+	Granularities      map[string]*Granularity
+	Scopes             map[string]*Scope
+	ComponentRoles     map[string]*ComponentRole
+	ComponentProfiles  map[string]*ComponentProfile
+	CompilerRules      map[string]*CompilerRule
+	BaselineStatistics map[string]*BaselineStatistic
+	SelectionTraits    map[string]*SelectionTraitDefinition
 }
 
 // HasIntent returns true if the given ID is a known intent.
@@ -99,5 +134,17 @@ func (r *Registry) HasGranularity(id string) bool { _, ok := r.Granularities[id]
 // HasScope returns true if the given ID is a known scope.
 func (r *Registry) HasScope(id string) bool { _, ok := r.Scopes[id]; return ok }
 
-// HasAdapterType returns true if the given ID is a known adapter type.
-func (r *Registry) HasAdapterType(id string) bool { _, ok := r.AdapterTypes[id]; return ok }
+// HasComponentRole returns true if the given ID is a known component role.
+func (r *Registry) HasComponentRole(id string) bool { _, ok := r.ComponentRoles[id]; return ok }
+
+// HasComponentProfile returns true if the given ID is a known component profile.
+func (r *Registry) HasComponentProfile(id string) bool { _, ok := r.ComponentProfiles[id]; return ok }
+
+// HasBaselineStatistic returns true if the given ID is a known baseline statistic.
+func (r *Registry) HasBaselineStatistic(id string) bool {
+	_, ok := r.BaselineStatistics[id]
+	return ok
+}
+
+// HasSelectionTrait returns true if the given ID is a known selection trait.
+func (r *Registry) HasSelectionTrait(id string) bool { _, ok := r.SelectionTraits[id]; return ok }

@@ -1,0 +1,32 @@
+component_roles:
+  # Pure functional roles. HOW a component implements its role belongs in component_profiles.yaml.
+  # "Adapter" in Kernloom vocabulary refers to Plugin Adapters (code loaded by KLIQ).
+  # Here we define COMPONENT ROLES: what function a component serves in the policy system.
+
+  - id: pep
+    description: Policy Enforcement Point. Enforces decisions or compiled actions inline.
+
+  - id: sensor
+    description: Passive observer. Produces signals without enforcement capability.
+
+  - id: analyzer
+    description: >
+      Produces derived signals: baselines, anomaly scores, relation state, risk scores.
+      Runs algorithms internally; Forge only sees standardised output statistics.
+
+  - id: pdp
+    description: Policy Decision Point. Evaluates policy rules and produces decisions.
+
+  - id: pip
+    description: >
+      Policy Information Point. Provides or enriches attributes and context used
+      during decision evaluation without enforcing anything itself.
+
+  - id: controller
+    description: >
+      Controls another runtime, policy platform, overlay network, gateway or managed
+      security service. Translates Forge capability actions into native platform calls.
+      Also used for local plugin adapter managers (e.g. KLIQ controlling KLShield/NGINX).
+
+  - id: sink
+    description: Exports events, metrics, telemetry, decisions or audit data to external systems.

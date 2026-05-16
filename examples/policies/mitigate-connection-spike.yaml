@@ -1,0 +1,94 @@
+kind: RuntimePolicy
+apiVersion: forge.kernloom.io/v1alpha2
+
+metadata:
+  id: mitigate-src-connection-spike
+  name: Mitigate source connection spike
+  description: >
+    Rate-limit a source IP when its current connection rate exceeds the learned
+    per-source baseline. Falls back to the global baseline when the per-source
+    model is not yet stable enough.
+
+intent: protection.abuse.mitigate
+
+target:
+  resource:
+    type: network_service
+    id: public-ziti-router
+    port: 443
+    protocol: tcp
+
+requirements:
+  required_capabilities:
+    - observe.network.connection
+    - analyze.baseline.compare
+    - enforce.traffic.rate_limit
+  min_granularity:
+    - src_ip
+  semantic_depth: l4
+  degradation:
+    allow: false
+
+baseline_requirements:
+  signal: network.metric.connections_per_second
+  preferred_scopes:
+    - src_ip
+    - tuple_5
+    - global
+  min_confidence: 0.7
+  fallback_allowed: true
+
+when:
+  language: cel
+  bindings:
+    current_cps:
+      from: signal
+      id: network.metric.connections_per_second
+      scope: src_ip
+
+    src_upper:
+      from: baseline
+      signal: network.metric.connections_per_second
+      scope: src_ip
+      statistic: upper_bound
+
+    src_confidence:
+      from: baseline
+      signal: network.metric.connections_per_second
+      scope: src_ip
+      statistic: confidence
+
+    src_phase:
+      from: baseline
+      signal: network.metric.connections_per_second
+      scope: src_ip
+      statistic: phase
+
+    global_upper:
+      from: baseline
+      signal: network.metric.connections_per_second
+      scope: global
+      statistic: upper_bound
+
+  expression: >
+    (
+      vars.src_phase == "stable" &&
+      vars.src_confidence >= 0.7 &&
+      vars.current_cps > vars.src_upper * 1.5
+    )
+    ||
+    (
+      vars.src_confidence < 0.7 &&
+      vars.current_cps > vars.global_upper * 1.5
+    )
+
+then:
+  - type: capability_action
+    capability: enforce.traffic.rate_limit
+    target:
+      granularity: src_ip
+      value_from: signals.network.entity.src_ip
+    parameters:
+      rate: adaptive
+      ttl: 10m
+    reason: source_connection_rate_above_learned_baseline

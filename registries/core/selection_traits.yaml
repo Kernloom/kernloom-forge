@@ -1,0 +1,65 @@
+selection_traits:
+  # Selection traits allow the compiler to score and rank adapter candidates for a
+  # policy in a generic, data-driven way — without hardcoding product knowledge.
+
+  - id: enforcement_position
+    description: Where enforcement happens relative to the traffic path.
+    allowed_values:
+      - early          # closest to the source, before the packet enters the stack
+      - mid            # at a proxy or gateway layer
+      - late           # at the application or service layer
+      - control_plane  # out-of-band decision point
+
+  - id: runtime_cost
+    description: Approximate compute cost of using this adapter for enforcement.
+    allowed_values:
+      - very_low   # kernel-space XDP / eBPF, near-zero overhead
+      - low        # kernel-space netfilter or simple userspace proxy
+      - medium     # userspace proxy with TLS/HTTP parsing
+      - high       # complex analysis, ML inference, remote API call
+
+  - id: semantic_precision
+    description: Richness of context the adapter can evaluate during enforcement.
+    allowed_values:
+      - coarse   # IP/port/protocol only
+      - medium   # connection-level + optional SNI/TLS pre-read
+      - high     # full HTTP request, identity claims, app context
+
+  - id: identity_awareness
+    description: Whether the adapter can attribute traffic to an authenticated identity.
+    allowed_values:
+      - none        # no identity information available
+      - weak        # inferred identity (e.g. mTLS cert only)
+      - strong      # verified subject_id / JWT claim / IdP-backed
+
+  - id: app_awareness
+    description: Whether the adapter can see application-layer request context.
+    allowed_values:
+      - none           # L3/L4 only
+      - http_metadata  # HTTP method, route, status — no body
+      - full_request   # full request including headers and body access
+
+  - id: source_attribution
+    description: Reliability of attributing traffic to a source entity.
+    allowed_values:
+      - strong       # direct: src_ip is the actual origin (no NAT/proxy distortion)
+      - conditional  # reliable only if PROXY protocol or X-Forwarded-For is trusted
+      - weak         # NATted, shared IP or no reliable attribution possible
+
+  - id: convergence_speed
+    description: How quickly a policy change or enforcement decision takes effect.
+    allowed_values:
+      - immediate  # atomic kernel update, effective in microseconds
+      - fast       # config reload within seconds
+      - eventual   # distributed propagation, may take tens of seconds or more
+
+  - id: blast_radius
+    description: Potential scope of impact if an enforcement action is incorrect.
+    allowed_values:
+      - packet    # one packet dropped — minimal impact
+      - flow      # one connection or flow affected
+      - listener  # all connections to a specific listener
+      - node      # all traffic on the host
+      - service   # all instances of a service
+      - tenant    # all traffic in a tenant
+      - global    # all traffic in the deployment

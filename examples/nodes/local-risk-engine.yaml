@@ -1,0 +1,108 @@
+kind: NodeDefinition
+apiVersion: forge.kernloom.io/v1alpha2
+
+# Local risk engine node: PDP + Analyzer + Controller.
+# Acts as the Forge entry point on a node — evaluates policies, learns baselines,
+# tracks communication relations, and deploys compiled enforcement plans to
+# locally managed adapters (e.g. an XDP filter or TCP proxy).
+
+metadata:
+  id: local-risk-engine-01
+  name: Local Risk Engine
+  version: 0.4.0
+
+adapter:
+  id: local-risk-engine-01
+  roles:
+    - pdp        # evaluates CEL conditions, produces decisions
+    - analyzer   # produces baseline signals and relation state
+    - controller # deploys compiled Forge enforcement plans to managed adapters
+  profiles:
+    - decision.local_pdp
+    - analysis.behavior_baseline
+    - analysis.relation_graph
+
+implementation:
+  runtime_mode: local_agent
+
+capabilities:
+  - id: analyze.baseline.learn
+    supported_signals:
+      - network.metric.packets_per_second
+      - network.metric.bytes_per_second
+      - network.metric.connections_per_second
+      - network.metric.syn_per_second
+    supported_scopes:
+      - global
+      - src_ip
+      - tuple_5
+    produces_statistics:
+      - expected
+      - lower_bound
+      - upper_bound
+      - deviation_ratio
+      - confidence
+      - phase
+      - sample_count
+      - window_seconds
+      - model_id
+      - model_version
+
+  - id: analyze.baseline.compare
+    supported_signals:
+      - network.metric.packets_per_second
+      - network.metric.bytes_per_second
+      - network.metric.connections_per_second
+      - network.metric.syn_per_second
+    supported_scopes:
+      - global
+      - src_ip
+      - tuple_5
+    produces_signals:
+      - baseline.expected
+      - baseline.upper_bound
+      - baseline.lower_bound
+      - baseline.deviation_ratio
+      - baseline.confidence
+      - baseline.phase
+      - anomaly.score
+      - anomaly.severity
+      - anomaly.confidence
+
+  - id: analyze.relation.learn
+    supported_scopes:
+      - relation_id
+      - service_id
+      - workload_id
+    produces_signals:
+      - relation.state.known
+      - relation.state.confidence
+      - relation.state.lifecycle
+
+  - id: analyze.risk.score
+    supported_scopes:
+      - global
+      - node_id
+      - src_ip
+      - tuple_5
+      - relation_id
+    produces_signals:
+      - risk.score
+      - risk.level
+      - risk.confidence
+
+constraints:
+  semantic_depth: analyzer
+  consistency:
+    scope: local_node
+    convergence: seconds
+
+selection_traits:
+  enforcement_position: control_plane
+  runtime_cost: low
+  semantic_precision: medium
+  identity_awareness: weak
+  app_awareness: none
+  source_attribution: strong
+  convergence_speed: fast
+  blast_radius: node
