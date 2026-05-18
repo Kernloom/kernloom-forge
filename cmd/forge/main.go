@@ -11,7 +11,12 @@ import (
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 
+	"log"
+	"net/http"
+
 	"github.com/kernloom/kernloom-forge/internal/compiler"
+	"github.com/kernloom/kernloom-forge/internal/forgeapi"
+	"github.com/kernloom/kernloom-forge/internal/forgedb"
 	"github.com/kernloom/kernloom-forge/internal/packs"
 	"github.com/kernloom/kernloom-forge/internal/registry"
 	"github.com/kernloom/kernloom-forge/internal/signing"
@@ -35,6 +40,7 @@ func rootCmd() *cobra.Command {
 	root.AddCommand(compileCmd())
 	root.AddCommand(packCmd())
 	root.AddCommand(keygenCmd())
+	root.AddCommand(serveCmd())
 	return root
 }
 
@@ -331,5 +337,56 @@ Example:
 	}
 	cmd.Flags().StringVar(&registryDir, "registry", "registries/core", "path to core registry directory")
 	cmd.Flags().StringVar(&nodesDir, "nodes", "examples/nodes", "path to node definitions directory")
+	return cmd
+}
+
+// ── forge serve ───────────────────────────────────────────────────────────────
+
+func serveCmd() *cobra.Command {
+	var addr string
+	var dbPath string
+	var enrollKey string
+
+	cmd := &cobra.Command{
+		Use:   "serve",
+		Short: "Run the Forge control-plane HTTP server",
+		Long: `Start the Forge HTTP control-plane that KLIQ nodes enroll into.
+
+Endpoints:
+  POST /api/v1/nodes/enroll                  — KLIQ registers itself
+  POST /api/v1/nodes/{id}/heartbeat          — periodic liveness + status
+  GET  /api/v1/nodes/{id}/policy-pack        — pull assigned signed pack
+  POST /api/v1/nodes/{id}/policy-pack/status — report pack apply result
+
+Admin endpoints (bind to loopback in production):
+  GET  /api/v1/nodes                         — list enrolled nodes
+  POST /api/v1/nodes/{id}/approve            — approve a pending node
+  POST /api/v1/packs?name=<n>               — register a signed pack (body = YAML)
+  POST /api/v1/nodes/{id}/assign-pack?pack=  — assign a pack to a node
+
+Example:
+  forge serve --addr :8080 --db /var/lib/kernloom/forge.db --enroll-key secret123`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			logger := log.New(os.Stderr, "[forge-serve] ", log.LstdFlags)
+
+			db, err := forgedb.Open(dbPath)
+			if err != nil {
+				return fmt.Errorf("open db: %w", err)
+			}
+			defer db.Close()
+			logger.Printf("database: %s", dbPath)
+
+			srv := forgeapi.New(db, enrollKey, logger)
+			if enrollKey == "" {
+				logger.Printf("WARNING: --enroll-key not set — API is open (dev mode)")
+			}
+
+			logger.Printf("listening on %s", addr)
+			return http.ListenAndServe(addr, srv.Handler())
+		},
+	}
+	cmd.Flags().StringVar(&addr, "addr", ":8080", "listen address")
+	cmd.Flags().StringVar(&dbPath, "db", "/var/lib/kernloom/forge.db", "path to SQLite database file")
+	cmd.Flags().StringVar(&enrollKey, "enroll-key", "", "shared enrollment key (Bearer token); empty = open dev mode")
 	return cmd
 }
