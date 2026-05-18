@@ -21,8 +21,8 @@ type NodeEnrollmentRequest struct {
 // it replaces the one-time enrollment token after first use.
 type NodeEnrollmentResponse struct {
 	NodeID       string `json:"node_id"`
-	Status       string `json:"status"`                 // pending | approved | rejected
-	SessionToken string `json:"session_token"`          // use for heartbeat + pack-pull
+	Status       string `json:"status"`        // pending | approved | rejected
+	SessionToken string `json:"session_token"` // use for heartbeat + pack-pull
 	Message      string `json:"message,omitempty"`
 }
 

@@ -27,10 +27,10 @@ import (
 
 // Server is the HTTP handler for the forge serve API.
 type Server struct {
-	db           *forgedb.DB
-	adminKey     string // admin endpoints
+	db            *forgedb.DB
+	adminKey      string // admin endpoints
 	enrollLimiter *ratelimit.Limiter
-	log          *log.Logger
+	log           *log.Logger
 }
 
 // New creates a Server.
@@ -190,10 +190,10 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 
 	node, _ := s.db.GetNode(req.NodeID)
 	writeJSON(w, http.StatusOK, NodeEnrollmentResponse{
-		NodeID:        req.NodeID,
-		Status:        string(node.Status),
-		SessionToken:  sessionToken,
-		Message:       "node registered; awaiting approval",
+		NodeID:       req.NodeID,
+		Status:       string(node.Status),
+		SessionToken: sessionToken,
+		Message:      "node registered; awaiting approval",
 	})
 }
 
