@@ -88,7 +88,6 @@ then:
     target:
       granularity: src_ip
       value_from: signals.network.entity.src_ip
-    parameters:
-      rate: adaptive
-      ttl: 10m
+    ttl: 10m
     reason: source_connection_rate_above_learned_baseline
+    # No rate_pps → autonomy mode: KLIQ derives rate from autotune baseline.

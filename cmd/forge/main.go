@@ -128,7 +128,6 @@ func policyCmd() *cobra.Command {
 func packCmd() *cobra.Command {
 	var registryDir string
 	var nodesDir string
-	var dryRun bool
 	var forgeURL string
 	var outFile string
 
@@ -181,7 +180,6 @@ Example:
 			// Render the LocalPolicyPack.
 			renderResult, err := packs.RenderLocalPolicyPack(packs.RenderRequest{
 				Policy:   policy,
-				DryRun:   dryRun,
 				ForgeURL: forgeURL,
 			})
 			if err != nil {
@@ -209,7 +207,6 @@ Example:
 	}
 	cmd.Flags().StringVar(&registryDir, "registry", "registries/core", "path to core registry directory")
 	cmd.Flags().StringVar(&nodesDir, "nodes", "examples/nodes", "path to node definitions directory")
-	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "set autonomy.dry_run=true in the pack")
 	cmd.Flags().StringVar(&forgeURL, "forge-url", "", "Forge endpoint to include in pack exports")
 	cmd.Flags().StringVarP(&outFile, "out", "o", "-", "output file (- for stdout)")
 	return cmd
