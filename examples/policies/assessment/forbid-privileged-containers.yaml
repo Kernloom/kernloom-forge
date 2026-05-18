@@ -1,0 +1,38 @@
+kind: Policy
+apiVersion: forge.kernloom.io/v1alpha2
+
+metadata:
+  id: forbid-privileged-containers
+  name: Forbid privileged containers
+  description: Privileged containers have full host kernel access.
+
+spec:
+  context: asset
+
+  requirements:
+    capabilities:
+      - assess.config.asset
+
+  rules:
+    - id: container-is-privileged
+      when:
+        language: cel
+        expression: >
+          document.kind == "Deployment" &&
+          has(document.spec) &&
+          has(document.spec.template) &&
+          document.spec.template.spec.containers.exists(c,
+            has(c.securityContext) &&
+            has(c.securityContext.privileged) &&
+            c.securityContext.privileged == true
+          )
+      effects:
+        - type: violation
+          severity: error
+          field: "spec.template.spec.containers[*].securityContext.privileged"
+          message: "Privileged containers are not allowed"
+          remediation: >
+            Remove privileged: true. Use specific capabilities instead:
+              securityContext:
+                capabilities:
+                  add: ["NET_ADMIN"]

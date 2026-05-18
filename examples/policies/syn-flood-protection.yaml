@@ -1,0 +1,46 @@
+kind: Policy
+apiVersion: forge.kernloom.io/v1alpha2
+
+metadata:
+  id: syn-flood-protection
+  name: SYN flood protection
+  description: >
+    Hard rate-limit sources sending SYN packets above a fixed threshold.
+    Directive mode: 10 pps ceiling applied immediately, no baseline needed.
+
+spec:
+  context: runtime
+  intent: protection.dos.mitigate
+
+  requirements:
+    capabilities:
+      - observe.network.packet_summary
+      - enforce.traffic.rate_limit
+    min_granularity:
+      - src_ip
+    degradation:
+      allow: false
+
+  inputs:
+    bindings:
+      syn_rate:
+        from: signal
+        id: network.metric.syn_per_second
+        scope: src_ip
+
+  rules:
+    - id: syn-above-flood-threshold
+      when:
+        language: cel
+        expression: "vars.syn_rate > 500.0"
+      effects:
+        - type: action
+          action: enforce.traffic.rate_limit
+          target:
+            granularity: src_ip
+            value_from: signals.network.entity.src_ip
+          parameters:
+            rate_pps: 10
+          constraints:
+            ttl: 15m
+          reason: syn_rate_above_flood_threshold

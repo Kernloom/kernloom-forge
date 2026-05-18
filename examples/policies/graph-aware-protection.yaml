@@ -1,0 +1,174 @@
+kind: Policy
+apiVersion: forge.kernloom.io/v1alpha2
+
+metadata:
+  id: graph-aware-protection
+  name: Graph-aware protection with anomaly fallback
+  description: >
+    Progressive Zero-Trust policy built on the connection graph learner.
+
+    Behaviour after graph freeze:
+      Known sources  (lifecycle: frozen|approved):
+        Dürfen kommunizieren, unterliegen aber weiterhin der lokalen
+        Anomalie-Detection. Bei Anomalie: autonomes Rate-Limit (KLIQ
+        leitet die Rate aus der gelernten Baseline ab).
+
+      Unbekannte Quellen (lifecycle: candidate|null):
+        Werden rate-limited (konservativ, direktiver Wert) und lösen
+        gleichzeitig ein Warning-Signal aus. Sie sind NICHT geblockt —
+        der Operator hat Zeit zu entscheiden ob sie approved werden.
+
+    Lernphase (vor Freeze):
+        Alle aktiven Quellen werden gelernt. Kein Enforcement ausser
+        dem globalen DoS-Schutz wenn PPS extrem hoch ist.
+
+    Drei Rules laufen unabhängig pro Quelle pro Tick:
+      1. learn-all-connections     — immer (lernt den Graph auf)
+      2. rate-limit-unknown-source — wenn Quelle nicht im Graph
+      3. anomaly-on-known-source   — wenn Quelle bekannt + Anomalie
+
+intent: access.relation.allow
+
+requirements:
+  capabilities:
+    - observe.network.connection
+    - observe.network.packet_summary
+    - analyze.relation.learn
+    - enforce.traffic.rate_limit
+  min_granularity:
+    - src_ip
+  degradation:
+    allow: false
+
+spec:
+  context: runtime
+
+  inputs:
+    bindings:
+      # ── Relation / Graph state ─────────────────────────────────────────────
+      lifecycle:
+        from: signal
+        id: relation.state.lifecycle     # candidate|learned|approved|frozen|denied|expired
+        scope: src_ip
+
+      relation_confidence:
+        from: signal
+        id: relation.state.confidence    # 0.0–1.0: wie gut diese Relation bekannt ist
+        scope: src_ip
+
+      # ── Anomalie-Scoring ───────────────────────────────────────────────────
+      anomaly_score:
+        from: signal
+        id: anomaly.score                # 0.0–1.0: kombinierter Anomalie-Score
+        scope: src_ip
+
+      anomaly_confidence:
+        from: signal
+        id: anomaly.confidence           # 0.0–1.0: wie sicher der Anomalie-Score ist
+        scope: src_ip
+
+      # ── Baseline (für Autonomie-Rate bei bekannten Quellen) ───────────────
+      current_pps:
+        from: signal
+        id: network.metric.packets_per_second
+        scope: src_ip
+
+      src_upper:
+        from: baseline
+        signal: network.metric.packets_per_second
+        scope: src_ip
+        statistic: upper_bound           # gelernter Normalwert dieser Quelle
+
+      src_baseline_confidence:
+        from: baseline
+        signal: network.metric.packets_per_second
+        scope: src_ip
+        statistic: confidence            # wie stabil die PPS-Baseline ist
+
+  rules:
+    # ── Rule 1: Verbindungen lernen ──────────────────────────────────────────
+    # Feuert immer (ausser für explizit denyed Quellen).
+    # Läuft in der Lernphase UND nach dem Freeze — nach Freeze werden neue
+    # Quellen als "candidate" markiert und können später approved werden.
+    - id: learn-all-connections
+      when:
+        language: cel
+        expression: >
+          vars.lifecycle != "denied"
+      effects:
+        - type: action
+          action: analyze.relation.learn
+          reason: continuous_graph_learning
+
+    # ── Rule 2: Unbekannte Quelle — rate-limit + warning ────────────────────
+    # Feuert wenn die Quelle noch nicht im Graphen gelernt ist.
+    # "Unbekannt" = lifecycle ist candidate oder leer (noch kein Eintrag).
+    #
+    # Verhalten:
+    #   - Rate-Limit mit festem Wert (Directive, 50 pps) — konservativ aber
+    #     nicht blockierend. Der Operator kann die Quelle approven ohne dass
+    #     sie vorher komplett gestoppt wird.
+    #   - Warning-Notify: strukturiertes Ereignis für Operator/SIEM.
+    #     (Heute: KLIQ loggt den CEL-Match; Correlate-Export folgt wenn
+    #     der Correlate-Uplink-Adapter aktiviert ist.)
+    - id: rate-limit-unknown-source
+      when:
+        language: cel
+        expression: >
+          vars.lifecycle == "candidate" ||
+          vars.lifecycle == "" ||
+          vars.lifecycle == null
+      effects:
+        - type: action
+          action: enforce.traffic.rate_limit
+          target:
+            granularity: src_ip
+            value_from: signals.network.entity.src_ip
+          parameters:
+            rate_pps: 50                 # Directive: fester Wert, unabhängig von Baseline
+          constraints:
+            ttl: 5m                      # kurz: Quelle kann schnell approved werden
+          reason: unknown_source_conservative_rate_limit
+
+        # Warning-Signal: strukturierter Befund für Operator.
+        # In KLIQ heute: CEL-Match wird geloggt (rate-limit-unknown-source matched: <ip>).
+        # Zukünftig: Correlate-Uplink-Adapter exportiert dieses Finding strukturiert.
+        - type: notify
+          channel: security
+          severity: warning
+          message: >
+            Unknown source — not in learned connection graph.
+            Rate-limited to 50 pps. Approve via: forge nodes approve-relation <node> <src>
+          reason: unknown_source_not_in_graph
+
+    # ── Rule 3: Bekannte Quelle mit Anomalie — adaptives Rate-Limit ─────────
+    # Feuert NUR wenn die Quelle bekannt (frozen/approved) ist UND
+    # gleichzeitig eine Anomalie erkannt wird.
+    #
+    # Bekannte Quellen dürfen grundsätzlich kommunizieren — deshalb kein
+    # Default-Rate-Limit für sie. Nur bei Anomalie greift die Regel.
+    #
+    # Autonomie-Modus: kein rate_pps → KLIQ leitet Rate aus gelernter
+    # Baseline ab. Eine bekannte Quelle die 2x ihre Norm schickt, bekommt
+    # ein Limit das nahe ihrer Norm liegt (nicht 50 pps wie bei Unbekannten).
+    - id: anomaly-on-known-source
+      when:
+        language: cel
+        expression: >
+          (vars.lifecycle == "frozen" || vars.lifecycle == "approved") &&
+          vars.src_baseline_confidence >= 0.5 &&
+          vars.current_pps > vars.src_upper * 1.5 &&
+          vars.anomaly_score > 0.5 &&
+          vars.anomaly_confidence >= 0.5
+      effects:
+        - type: action
+          action: enforce.traffic.rate_limit
+          target:
+            granularity: src_ip
+            value_from: signals.network.entity.src_ip
+          constraints:
+            ttl: 10m                     # länger: bekannte Quelle, auffälliges Muster
+          reason: known_source_anomaly_detected
+          # Kein rate_pps → Autonomie: KLIQ wählt Rate basierend auf Baseline.
+          # api-node-01 mit Baseline 80 pps bekommt ~80 pps Limit,
+          # nicht die aggressive 50 pps für Unbekannte.

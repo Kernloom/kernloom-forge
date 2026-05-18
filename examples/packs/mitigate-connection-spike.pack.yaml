@@ -1,27 +1,84 @@
-apiVersion: kernloom.io/v1alpha1
+apiVersion: kernloom.io/kliq/v1alpha1
 kind: LocalPolicyPack
 metadata:
     name: mitigate-src-connection-spike
     description: |
-        Rate-limit a source IP when its current connection rate exceeds the learned per-source baseline. Falls back to the global baseline when the per-source model is not yet stable enough.
+        Rate-limit a source IP when its connection rate exceeds the learned baseline. Falls back to the global trigger when per-source confidence is too low. Autonomy mode: KLIQ derives the effective rate from autotune.
     labels:
-        forge.intent: protection.abuse.mitigate
+        forge.enforcement_mode: autonomy
         forge.policy_id: mitigate-src-connection-spike
+    issued_at: "2026-05-18T18:50:44Z"
 spec:
     capabilities_required:
         - enforce.traffic.rate_limit
-    autonomy:
-        dry_run: false
-        max_action: rate_limit
-        allow_local_block: false
+    action_authorization:
+        allowed_capabilities:
+            - enforce.traffic.rate_limit
+        default_effect: deny
     rules:
-        - name: forge-mitigate-src-connection-spike-enforce-traffic-rate-limit
+        - name: forge-mitigate-src-connection-spike-rule0-enforce-traffic-rate-limit
           when:
-            fsm_level: soft
+            language: cel
+            bindings:
+                current_cps:
+                    from: signal
+                    id: network.metric.connections_per_second
+                    scope: src_ip
+                global_upper:
+                    from: baseline
+                    signal: network.metric.connections_per_second
+                    scope: global
+                    statistic: upper_bound
+                src_confidence:
+                    from: baseline
+                    signal: network.metric.connections_per_second
+                    scope: src_ip
+                    statistic: confidence
+                src_phase:
+                    from: baseline
+                    signal: network.metric.connections_per_second
+                    scope: src_ip
+                    statistic: phase
+                src_upper:
+                    from: baseline
+                    signal: network.metric.connections_per_second
+                    scope: src_ip
+                    statistic: upper_bound
+            expression: |
+                vars.src_phase == "stable" && vars.src_confidence >= 0.7 && vars.current_cps > vars.src_upper * 1.5
           then:
-            action: rate_limit
             capability: enforce.traffic.rate_limit
             ttl: 10m
-            params:
-                rate: adaptive
-                ttl: 10m
+        - name: forge-mitigate-src-connection-spike-rule1-enforce-traffic-rate-limit
+          when:
+            language: cel
+            bindings:
+                current_cps:
+                    from: signal
+                    id: network.metric.connections_per_second
+                    scope: src_ip
+                global_upper:
+                    from: baseline
+                    signal: network.metric.connections_per_second
+                    scope: global
+                    statistic: upper_bound
+                src_confidence:
+                    from: baseline
+                    signal: network.metric.connections_per_second
+                    scope: src_ip
+                    statistic: confidence
+                src_phase:
+                    from: baseline
+                    signal: network.metric.connections_per_second
+                    scope: src_ip
+                    statistic: phase
+                src_upper:
+                    from: baseline
+                    signal: network.metric.connections_per_second
+                    scope: src_ip
+                    statistic: upper_bound
+            expression: |
+                vars.src_confidence < 0.7 && vars.current_cps > vars.global_upper * 1.5
+          then:
+            capability: enforce.traffic.rate_limit
+            ttl: 10m

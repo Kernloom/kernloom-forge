@@ -2,11 +2,11 @@ kind: Policy
 apiVersion: forge.kernloom.io/v1alpha2
 
 metadata:
-  id: quarantine-sustained-anomaly
-  name: Quarantine sustained anomaly
+  id: block-confirmed-attacker
+  name: Block confirmed attacker
   description: >
-    Hard rate-limit a source with sustained high anomaly score (0.7–0.9).
-    Combines with block-confirmed-attacker: this fires at 0.7, block at 0.9.
+    Block a source with critically high anomaly score AND high confidence.
+    Requires both to prevent false positives during baseline learning.
 
 spec:
   context: runtime
@@ -15,7 +15,7 @@ spec:
   requirements:
     capabilities:
       - observe.network.packet_summary
-      - enforce.traffic.tarpit
+      - enforce.access.deny
     min_granularity:
       - src_ip
     degradation:
@@ -33,21 +33,18 @@ spec:
         scope: src_ip
 
   rules:
-    - id: tarpit-moderate-anomaly
+    - id: block-critical-anomaly
       when:
         language: cel
         expression: >
-          vars.anomaly_score > 0.7 &&
-          vars.anomaly_confidence >= 0.6 &&
-          vars.anomaly_score <= 0.9
+          vars.anomaly_score > 0.9 &&
+          vars.anomaly_confidence >= 0.8
       effects:
         - type: action
-          action: enforce.traffic.tarpit
+          action: enforce.access.deny
           target:
             granularity: src_ip
             value_from: signals.network.entity.src_ip
-          parameters:
-            rate_pps: 2
           constraints:
-            ttl: 30m
-          reason: sustained_anomaly_below_block_threshold
+            ttl: 2h
+          reason: critical_anomaly_score_with_high_confidence
