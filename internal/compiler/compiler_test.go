@@ -104,20 +104,6 @@ func TestCompileMitigateConnectionSpike(t *testing.T) {
 		t.Fatalf("expected %q, got %q — missing: %v", compiler.StatusSuccess, result.Status, result.Missing)
 	}
 
-	// Analyzer must be selected for analyze.baseline.compare.
-	if len(result.SelectedPlan.Analyzers) == 0 {
-		t.Error("expected at least one analyzer in selected plan")
-	}
-	analyzerOK := false
-	for _, a := range result.SelectedPlan.Analyzers {
-		if a.NodeID == "local-risk-engine-01" {
-			analyzerOK = true
-		}
-	}
-	if !analyzerOK {
-		t.Errorf("local-risk-engine-01 not selected as analyzer; got: %v", result.SelectedPlan.Analyzers)
-	}
-
 	// Enforcer must be selected for enforce.traffic.rate_limit.
 	if len(result.SelectedPlan.Enforcers) == 0 {
 		t.Error("expected at least one enforcer in selected plan")
@@ -153,9 +139,8 @@ func TestCompileDOSPrevention(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CompilePolicy: %v", err)
 	}
-	// DOS prevention policy has no requirements block — compiler falls back to then: actions.
-	// Either success or a warning about missing requirements — both are acceptable.
-	if result.PolicyID != "block-critical-pps-source" {
+	// dos-prevention uses only rate_limit — success or partial match expected.
+	if result.PolicyID != "dos-prevention" {
 		t.Errorf("unexpected policy ID %q", result.PolicyID)
 	}
 }

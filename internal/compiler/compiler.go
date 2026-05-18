@@ -97,9 +97,15 @@ type nodeEval struct {
 func CompilePolicy(req CompileRequest, reg *registry.Registry) (*CompileResult, error) {
 	_ = reg // reserved for future semantic_depth and registry cross-checks
 
+	// Normalize so spec.requirements and spec.rules are populated regardless of source format.
+	req.Policy.Normalize()
+
 	required, warn := collectRequiredCapabilities(req.Policy)
-	minGran := req.Policy.Requirements.MinGranularity
-	degradationAllowed := req.Policy.Requirements.Degradation.Allow
+	minGran := req.Policy.Spec.Requirements.MinGranularity
+	if len(minGran) == 0 {
+		minGran = req.Policy.Requirements.MinGranularity
+	}
+	degradationAllowed := req.Policy.Spec.Requirements.Degradation.Allow || req.Policy.Requirements.Degradation.Allow
 
 	result := &CompileResult{
 		Kind:       "CompilerDecisionReport",
@@ -228,8 +234,8 @@ func CompilePolicy(req CompileRequest, reg *registry.Registry) (*CompileResult, 
 }
 
 // collectRequiredCapabilities gathers all capability IDs the policy needs.
-// Primary source: requirements.required_capabilities.
-// Fallback source: capability_action entries in then: block (with a warning).
+// Reads from canonical spec.requirements.capabilities first, falls back to
+// legacy requirements.required_capabilities and spec.rules[].effects[].
 func collectRequiredCapabilities(policy validator.Policy) (caps []string, warning string) {
 	seen := make(map[string]bool)
 	add := func(id string) {
@@ -239,16 +245,32 @@ func collectRequiredCapabilities(policy validator.Policy) (caps []string, warnin
 		}
 	}
 
+	// Canonical form: spec.requirements.capabilities
+	for _, capID := range policy.Spec.Requirements.Capabilities {
+		add(capID)
+	}
+	// Legacy form: spec.requirements.required_capabilities
+	for _, capID := range policy.Spec.Requirements.RequiredCapabilities {
+		add(capID)
+	}
+	// Legacy top-level requirements block
 	for _, capID := range policy.Requirements.RequiredCapabilities {
 		add(capID)
 	}
-	for _, action := range policy.Then {
-		if action.Type == "capability_action" {
-			add(action.Capability)
+	// Fallback: derive from spec.rules[].effects[].action
+	for _, rule := range policy.Spec.Rules {
+		for _, effect := range rule.Effects {
+			if effect.Type == "action" {
+				capID := effect.Action
+				if capID == "" {
+					capID = effect.Capability
+				}
+				add(capID)
+			}
 		}
 	}
 	if len(caps) == 0 {
-		warning = "policy has no requirements.required_capabilities and no capability_action in then: — nothing to compile"
+		warning = "policy has no requirements.capabilities and no action effects — nothing to compile"
 	}
 	return caps, warning
 }

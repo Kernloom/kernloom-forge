@@ -70,9 +70,12 @@ func TestRenderMitigateConnectionSpike(t *testing.T) {
 	for _, rule := range pack.Spec.Rules {
 		if rule.Then.Capability == "enforce.traffic.rate_limit" {
 			foundRateLimit = true
-			// v1.1: when.capability must be the Forge ID, no fsm_level.
-			if rule.When.Capability != "enforce.traffic.rate_limit" {
-				t.Errorf("rate_limit rule when.capability: got %q, want enforce.traffic.rate_limit", rule.When.Capability)
+			// v1.2: CEL-based policies use when.language + when.expression, not when.capability.
+			if rule.When.Language != "cel" {
+				t.Errorf("rate_limit rule when.language: got %q, want cel", rule.When.Language)
+			}
+			if rule.When.Expression == "" {
+				t.Error("rate_limit rule when.expression must not be empty")
 			}
 		}
 	}
@@ -118,29 +121,41 @@ func TestRenderDOSPrevention(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RenderLocalPolicyPack: %v", err)
 	}
-	// v1.1: DOS policy uses enforce.network.deny → block capability must be in allowed_capabilities.
-	hasBlockCap := false
+	// dos-prevention uses rate_limit only — no block capability expected.
+	if len(result.Pack.Spec.Rules) == 0 {
+		t.Fatal("expected at least one rule")
+	}
+	hasRateLimit := false
 	for _, cap := range result.Pack.Spec.ActionAuthorization.AllowedCapabilities {
-		if cap == "enforce.network.deny" || cap == "enforce.access.deny" {
-			hasBlockCap = true
+		if cap == "enforce.traffic.rate_limit" {
+			hasRateLimit = true
 		}
 	}
-	if !hasBlockCap {
-		t.Errorf("dos-prevention allowed_capabilities should contain a block capability, got: %v",
+	if !hasRateLimit {
+		t.Errorf("dos-prevention should have enforce.traffic.rate_limit in allowed_capabilities, got: %v",
 			result.Pack.Spec.ActionAuthorization.AllowedCapabilities)
 	}
 }
 
-func TestRenderQuarantineSourceOnlyIntentAction(t *testing.T) {
-	// quarantine-source.yaml uses intent_action, not capability_action.
-	// The renderer cannot expand intents yet — it requires the policy to be
-	// pre-compiled to capability_actions first. This is expected to fail.
+func TestRenderQuarantineSource(t *testing.T) {
+	// quarantine-source.yaml now uses enforce.traffic.tarpit (capability_action).
+	// It should render successfully.
 	reg := loadReg(t)
 	policy := loadPolicy(t, reg, "quarantine-source.yaml")
 
-	_, err := packs.RenderLocalPolicyPack(packs.RenderRequest{Policy: policy})
-	if err == nil {
-		t.Error("expected error: quarantine policy only has intent_action, not capability_action")
+	result, err := packs.RenderLocalPolicyPack(packs.RenderRequest{Policy: policy})
+	if err != nil {
+		t.Fatalf("RenderLocalPolicyPack: %v", err)
+	}
+	hasTarpit := false
+	for _, cap := range result.Pack.Spec.ActionAuthorization.AllowedCapabilities {
+		if cap == "enforce.traffic.tarpit" {
+			hasTarpit = true
+		}
+	}
+	if !hasTarpit {
+		t.Errorf("quarantine policy should have enforce.traffic.tarpit in allowed_capabilities, got: %v",
+			result.Pack.Spec.ActionAuthorization.AllowedCapabilities)
 	}
 }
 
