@@ -57,16 +57,22 @@ type rawCompilerRules struct {
 // LoadDir loads all registry files from dir and returns a validated Registry.
 func LoadDir(dir string) (*Registry, error) {
 	r := &Registry{
-		Intents:            make(map[string]*Intent),
-		Capabilities:       make(map[string]*Capability),
-		Signals:            make(map[string]*Signal),
-		Granularities:      make(map[string]*Granularity),
-		Scopes:             make(map[string]*Scope),
-		ComponentRoles:     make(map[string]*ComponentRole),
-		ComponentProfiles:  make(map[string]*ComponentProfile),
-		CompilerRules:      make(map[string]*CompilerRule),
-		BaselineStatistics: make(map[string]*BaselineStatistic),
-		SelectionTraits:    make(map[string]*SelectionTraitDefinition),
+		Intents:              make(map[string]*Intent),
+		Capabilities:         make(map[string]*Capability),
+		Signals:              make(map[string]*Signal),
+		Granularities:        make(map[string]*Granularity),
+		Scopes:               make(map[string]*Scope),
+		ComponentRoles:       make(map[string]*ComponentRole),
+		ComponentProfiles:    make(map[string]*ComponentProfile),
+		CompilerRules:        make(map[string]*CompilerRule),
+		BaselineStatistics:   make(map[string]*BaselineStatistic),
+		SelectionTraits:      make(map[string]*SelectionTraitDefinition),
+		EffectTypes:          make(map[string]*EffectType),
+		PolicyContexts:       make(map[string]*PolicyContext),
+		ActionConstraints:    make(map[string]*ActionConstraint),
+		TrustAssuranceLevels: make(map[string]*TrustAssuranceLevel),
+		DecisionModes:        make(map[string]*DecisionMode),
+		FailoverBehaviors:    make(map[string]*FailoverBehavior),
 	}
 
 	files, err := os.ReadDir(dir)
@@ -253,6 +259,114 @@ func (r *Registry) loadFile(path string) error {
 				return fmt.Errorf("duplicate compiler_rule id: %s", item.ID)
 			}
 			r.CompilerRules[item.ID] = item
+		}
+
+	case "effect_types.yaml":
+		var v struct {
+			EffectTypes []EffectType `yaml:"effect_types"`
+		}
+		if err := yaml.Unmarshal(data, &v); err != nil {
+			return err
+		}
+		for i := range v.EffectTypes {
+			item := &v.EffectTypes[i]
+			if item.ID == "" {
+				return fmt.Errorf("effect_type missing id")
+			}
+			if _, dup := r.EffectTypes[item.ID]; dup {
+				return fmt.Errorf("duplicate effect_type id: %s", item.ID)
+			}
+			r.EffectTypes[item.ID] = item
+		}
+
+	case "policy_contexts.yaml":
+		var v struct {
+			PolicyContexts []PolicyContext `yaml:"policy_contexts"`
+		}
+		if err := yaml.Unmarshal(data, &v); err != nil {
+			return err
+		}
+		for i := range v.PolicyContexts {
+			item := &v.PolicyContexts[i]
+			if item.ID == "" {
+				return fmt.Errorf("policy_context missing id")
+			}
+			if _, dup := r.PolicyContexts[item.ID]; dup {
+				return fmt.Errorf("duplicate policy_context id: %s", item.ID)
+			}
+			r.PolicyContexts[item.ID] = item
+		}
+
+	case "action_constraints.yaml":
+		var v struct {
+			ActionConstraints []ActionConstraint `yaml:"action_constraints"`
+		}
+		if err := yaml.Unmarshal(data, &v); err != nil {
+			return err
+		}
+		for i := range v.ActionConstraints {
+			item := &v.ActionConstraints[i]
+			if item.ID == "" {
+				return fmt.Errorf("action_constraint missing id")
+			}
+			if _, dup := r.ActionConstraints[item.ID]; dup {
+				return fmt.Errorf("duplicate action_constraint id: %s", item.ID)
+			}
+			r.ActionConstraints[item.ID] = item
+		}
+
+	case "trust_assurance_levels.yaml":
+		var v struct {
+			TrustAssuranceLevels []TrustAssuranceLevel `yaml:"trust_assurance_levels"`
+		}
+		if err := yaml.Unmarshal(data, &v); err != nil {
+			return err
+		}
+		for i := range v.TrustAssuranceLevels {
+			item := &v.TrustAssuranceLevels[i]
+			if item.ID == "" {
+				return fmt.Errorf("trust_assurance_level missing id")
+			}
+			if _, dup := r.TrustAssuranceLevels[item.ID]; dup {
+				return fmt.Errorf("duplicate trust_assurance_level id: %s", item.ID)
+			}
+			r.TrustAssuranceLevels[item.ID] = item
+		}
+
+	case "decision_modes.yaml":
+		var v struct {
+			DecisionModes []DecisionMode `yaml:"decision_modes"`
+		}
+		if err := yaml.Unmarshal(data, &v); err != nil {
+			return err
+		}
+		for i := range v.DecisionModes {
+			item := &v.DecisionModes[i]
+			if item.ID == "" {
+				return fmt.Errorf("decision_mode missing id")
+			}
+			if _, dup := r.DecisionModes[item.ID]; dup {
+				return fmt.Errorf("duplicate decision_mode id: %s", item.ID)
+			}
+			r.DecisionModes[item.ID] = item
+		}
+
+	case "failover_behaviors.yaml":
+		var v struct {
+			FailoverBehaviors []FailoverBehavior `yaml:"failover_behaviors"`
+		}
+		if err := yaml.Unmarshal(data, &v); err != nil {
+			return err
+		}
+		for i := range v.FailoverBehaviors {
+			item := &v.FailoverBehaviors[i]
+			if item.ID == "" {
+				return fmt.Errorf("failover_behavior missing id")
+			}
+			if _, dup := r.FailoverBehaviors[item.ID]; dup {
+				return fmt.Errorf("duplicate failover_behavior id: %s", item.ID)
+			}
+			r.FailoverBehaviors[item.ID] = item
 		}
 	}
 	return nil

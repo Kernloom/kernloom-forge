@@ -1,0 +1,58 @@
+failover_behaviors:
+  # Failover behaviors define what a local PDP does when it loses contact
+  # with the central policy authority (Forge) and cannot obtain a fresh
+  # policy pack or decision.
+  #
+  # Used in PolicyAssignment.delegation.failover.if_policy_authority_unreachable.
+  #
+  # This directly implements CLAUDE.md rule #3:
+  #   "Last-Known-Good bei Control-Plane-Ausfall — KLIQ läuft mit gecachter
+  #   Config weiter, wenn Forge nicht erreichbar ist."
+  #
+  # The behaviors form a risk spectrum from most permissive (fail_open)
+  # to most restrictive (fail_closed). fail_static is the default and
+  # the safest general-purpose choice.
+
+  - id: fail_static
+    description: >
+      Continue enforcing with the last successfully applied policy pack.
+      No new escalations are initiated; existing enforcement entries
+      expire normally via TTL. New sources receive no enforcement until
+      Forge contact is restored.
+      This is the default and recommended behavior for most nodes.
+      Implements CLAUDE.md rule #3 directly.
+    risk: low
+    default: true
+
+  - id: fail_safe
+    description: >
+      Like fail_static, but also suspends enforcement TTL expiry —
+      active enforcement entries are held until contact is restored.
+      Suitable for high-security nodes where resuming Forge contact
+      should happen before any enforcement expires.
+    risk: low
+
+  - id: fail_open
+    description: >
+      Disable all enforcement. Allow all traffic through regardless of
+      what the last policy pack specified. Use only on nodes where
+      availability is strictly more important than security, and where
+      a temporary policy gap is acceptable.
+    risk: high
+
+  - id: fail_closed
+    description: >
+      Block all traffic except what is explicitly in the XDP allowlist
+      from a previous graph-freeze. Equivalent to activating default-deny
+      with no new policy decisions. Suitable for nodes protecting very
+      sensitive resources where a Forge outage should trigger maximum
+      restriction, not maximum permissiveness.
+    risk: medium
+
+  - id: fail_notify_only
+    description: >
+      Continue observing and generating signals and findings, but suspend
+      all enforcement actions. Notifications and exports continue normally.
+      Suitable for audit nodes or during planned Forge maintenance windows
+      where monitoring must not be interrupted but enforcement can pause.
+    risk: medium

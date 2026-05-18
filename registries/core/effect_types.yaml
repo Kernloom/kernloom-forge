@@ -1,0 +1,62 @@
+effect_types:
+  # action: Execute a capability action against a PEP or controller.
+  # Valid in context: runtime
+  - id: action
+    description: >
+      Execute a Forge capability against a registered PEP or controller adapter.
+      The action field must be a canonical Forge capability ID (enforce.traffic.rate_limit, etc.).
+      The target specifies the granularity and value source.
+    allowed_contexts: [runtime]
+
+  # violation: Report a policy violation from an asset or config assessment.
+  # Valid in context: asset
+  - id: violation
+    description: >
+      Report that a submitted config asset violates a policy rule.
+      Must include a message. Severity defaults to "error" if absent.
+      Violation effects block a deployment pipeline when severity is error.
+    allowed_contexts: [asset]
+    required_fields: [message]
+
+  # finding: Report a compliance or posture finding from inventory evaluation.
+  # Valid in context: inventory, runtime
+  - id: finding
+    description: >
+      Report a compliance finding without blocking action. Used for inventory
+      drift, missing capabilities, unexpected components or posture issues.
+      Findings are informational by default; severity escalates reporting.
+    allowed_contexts: [inventory, runtime]
+
+  # decision: Issue a policy-level decision that restricts or grants available actions.
+  # Valid in context: trust, inventory
+  - id: decision
+    description: >
+      Issue a policy-level decision such as restricting enforcement actions
+      when trust is insufficient, or granting elevated permissions when
+      attestation succeeds.
+    allowed_contexts: [trust, inventory]
+
+  # recommendation: Suggest an action without automatic authorization.
+  # Valid in context: runtime, inventory
+  - id: recommendation
+    description: >
+      Suggest an action when the policy detects an anomaly but enforcement
+      is not delegated. The recommendation is logged and may be surfaced
+      to an operator but does not trigger automatic enforcement.
+    allowed_contexts: [runtime, inventory]
+
+  # notify: Send a notification to a channel or sink.
+  # Valid in any context.
+  - id: notify
+    description: >
+      Send an alert or notification when a rule matches. Does not enforce
+      anything. Useful for logging, SIEM export or operator notification.
+    allowed_contexts: [runtime, asset, inventory, trust, event]
+
+  # export: Export an event, metric or finding to an external sink.
+  # Valid in any context.
+  - id: export
+    description: >
+      Export a structured event or finding to an external system such as
+      OpenTelemetry, a SIEM, a webhook or the Correlate product.
+    allowed_contexts: [runtime, asset, inventory, trust, event]
