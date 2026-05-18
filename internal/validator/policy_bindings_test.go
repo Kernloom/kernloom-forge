@@ -33,6 +33,9 @@ func TestPolicyWithValidSignalBinding(t *testing.T) {
 			},
 			Expression: "vars.current_cps > 100",
 		},
+		Then: []validator.PolicyAction{
+			{Type: "capability_action", Capability: "enforce.traffic.rate_limit"},
+		},
 	}
 	p.Metadata.ID = "test-signal-binding"
 	if err := validator.ValidatePolicy(p, reg); err != nil {
@@ -55,6 +58,9 @@ func TestPolicyWithValidBaselineBinding(t *testing.T) {
 				},
 			},
 			Expression: "true",
+		},
+		Then: []validator.PolicyAction{
+			{Type: "capability_action", Capability: "enforce.traffic.rate_limit"},
 		},
 	}
 	p.Metadata.ID = "test-baseline-binding"
@@ -157,6 +163,9 @@ func TestPolicyRequirementsValidated(t *testing.T) {
 			},
 			MinGranularity: []string{"src_ip"},
 		},
+		Then: []validator.PolicyAction{
+			{Type: "capability_action", Capability: "enforce.traffic.rate_limit"},
+		},
 	}
 	p.Metadata.ID = "test-requirements"
 	if err := validator.ValidatePolicy(p, reg); err != nil {
@@ -188,6 +197,9 @@ func TestPolicyBaselineRequirementsValidated(t *testing.T) {
 			MinConfidence:   0.7,
 			FallbackAllowed: true,
 		},
+		Then: []validator.PolicyAction{
+			{Type: "capability_action", Capability: "enforce.traffic.rate_limit"},
+		},
 	}
 	p.Metadata.ID = "test-baseline-req"
 	if err := validator.ValidatePolicy(p, reg); err != nil {
@@ -214,6 +226,9 @@ func TestPolicyNewIntentRelationLearnValid(t *testing.T) {
 	p := &validator.Policy{
 		Kind:   "RuntimePolicy",
 		Intent: "relation.learn",
+		Then: []validator.PolicyAction{
+			{Type: "capability_action", Capability: "analyze.relation.learn"},
+		},
 	}
 	p.Metadata.ID = "test-relation-learn"
 	if err := validator.ValidatePolicy(p, reg); err != nil {
@@ -226,6 +241,9 @@ func TestPolicyNewIntentProtectionDosMitigateValid(t *testing.T) {
 	p := &validator.Policy{
 		Kind:   "RuntimePolicy",
 		Intent: "protection.dos.mitigate",
+		Then: []validator.PolicyAction{
+			{Type: "capability_action", Capability: "enforce.traffic.rate_limit"},
+		},
 	}
 	p.Metadata.ID = "test-dos-mitigate"
 	if err := validator.ValidatePolicy(p, reg); err != nil {
