@@ -30,3 +30,10 @@ component_roles:
 
   - id: sink
     description: Exports events, metrics, telemetry, decisions or audit data to external systems.
+
+  - id: assessor
+    description: >
+      Evaluates static config assets (Kubernetes manifests, deployment configs, IaC plans)
+      against AssessmentPolicy rules in a deployment pipeline or on-demand. Produces
+      structured violation reports rather than runtime enforcement actions.
+      Not present at runtime — invoked synchronously by CI/CD or an operator.

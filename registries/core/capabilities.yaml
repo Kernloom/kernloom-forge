@@ -515,3 +515,52 @@ capabilities:
     domain: event
     allowed_roles: [sink, pdp]
     risk_class: safe
+
+  # ── Assess: Config ────────────────────────────────────────────────────────────
+  # Assessment capabilities are used in AssessmentPolicy rules. They are evaluated
+  # synchronously against a submitted config asset (not against live signals).
+  # The "assessor" role is exclusively for components that evaluate assets
+  # in a deployment pipeline or on-demand — not for runtime enforcement.
+
+  # Forge does not know what Kubernetes, KLIQ, Terraform, or NGINX are.
+  # Forge knows how to evaluate a structured config document with CEL.
+  # Asset-type-specific logic lives in Policy Libraries, not in the Core Registry.
+
+  - id: assess.config.asset
+    category: assess
+    domain: config
+    allowed_roles: [assessor]
+    risk_class: safe
+    description: >
+      Assess a single submitted config asset. The full parsed document is
+      available as the CEL variable "document"; asset metadata as "asset".
+      The policy expresses constraints using CEL without Forge knowing the
+      asset's schema (Kubernetes, KLIQ, Terraform, NGINX, etc.).
+
+  - id: assess.config.structured
+    category: assess
+    domain: config
+    allowed_roles: [assessor]
+    risk_class: safe
+    description: >
+      Assess a parsed structured document (YAML, JSON, TOML, HCL).
+      Use when the asset is a config file whose structure is not known to Forge.
+
+  - id: assess.config.schema
+    category: assess
+    domain: config
+    allowed_roles: [assessor]
+    risk_class: safe
+    description: >
+      Assess a config asset that carries a schema_id. Policies can branch on
+      asset.schema_id to apply schema-specific rules without Forge encoding
+      schema knowledge in the registry.
+
+  - id: assess.config.bundle
+    category: assess
+    domain: config
+    allowed_roles: [assessor]
+    risk_class: safe
+    description: >
+      Assess multiple related config assets as one bundle (e.g. all manifests
+      in a Helm release, a Terraform module directory, a multi-document YAML).

@@ -269,3 +269,61 @@ signals:
     allowed_values: [none, log, allow, deny, rate_limit, quarantine, default_deny]
     allowed_scopes: [global, src_ip, tuple_5, relation]
     allowed_producers: [pdp, pep]
+
+  # ── Config (Assessment) ───────────────────────────────────────────────────────
+  # Config signals describe the outcome of an asset assessment, not the
+  # asset's internal fields. Forge does not register Kubernetes-specific,
+  # KLIQ-specific, or any other platform-specific signals here.
+  # Platform-specific fields are accessed directly via CEL ("document.spec.foo")
+  # and belong in Policy Libraries, not in the Core Registry.
+
+  - id: config.asset.type
+    domain: config
+    type: entity
+    unit: string
+    allowed_scopes: [global]
+    allowed_producers: [assessor]
+
+  - id: config.asset.schema_id
+    domain: config
+    type: entity
+    unit: string
+    allowed_scopes: [global]
+    allowed_producers: [assessor]
+
+  - id: config.asset.hash
+    domain: config
+    type: entity
+    unit: string
+    allowed_scopes: [global]
+    allowed_producers: [assessor]
+
+  - id: config.asset.valid
+    domain: config
+    type: state
+    unit: boolean
+    allowed_scopes: [global]
+    allowed_producers: [assessor]
+
+  - id: config.assessment.result
+    domain: config
+    type: state
+    unit: enum
+    allowed_values: [pass, warn, fail, error]
+    allowed_scopes: [global]
+    allowed_producers: [assessor]
+
+  - id: config.assessment.violation_count
+    domain: config
+    type: metric
+    unit: count
+    allowed_scopes: [global]
+    allowed_producers: [assessor]
+
+  - id: config.assessment.max_severity
+    domain: config
+    type: state
+    unit: enum
+    allowed_values: [none, info, low, medium, high, critical]
+    allowed_scopes: [global]
+    allowed_producers: [assessor]
