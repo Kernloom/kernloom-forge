@@ -74,6 +74,12 @@ capabilities:
     supports_ttl: true
     supports_dry_run: true
 
+  - id: enforce.traffic.tarpit
+    granularity:
+      - src_ip
+    supports_ttl: true
+    supports_dry_run: true
+
   - id: enforce.access.default_deny
     granularity:
       - interface

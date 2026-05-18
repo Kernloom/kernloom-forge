@@ -119,6 +119,11 @@ compiler_rules:
         required_granularity: [src_ip]
         priority: 10
 
+      - capability: enforce.traffic.tarpit
+        domain: traffic
+        required_granularity: [src_ip]
+        priority: 15
+
       - capability: enforce.access.deny
         domain: access
         required_granularity: [src_ip]
