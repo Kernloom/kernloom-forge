@@ -14,6 +14,7 @@ import (
 	"github.com/kernloom/kernloom-forge/internal/compiler"
 	"github.com/kernloom/kernloom-forge/internal/packs"
 	"github.com/kernloom/kernloom-forge/internal/registry"
+	"github.com/kernloom/kernloom-forge/internal/signing"
 	"github.com/kernloom/kernloom-forge/internal/validator"
 )
 
@@ -33,6 +34,7 @@ func rootCmd() *cobra.Command {
 	root.AddCommand(policyCmd())
 	root.AddCommand(compileCmd())
 	root.AddCommand(packCmd())
+	root.AddCommand(keygenCmd())
 	return root
 }
 
@@ -130,6 +132,7 @@ func packCmd() *cobra.Command {
 	var nodesDir string
 	var forgeURL string
 	var outFile string
+	var signingKeyPath string
 
 	cmd := &cobra.Command{
 		Use:   "pack <policy.yaml>",
@@ -194,6 +197,19 @@ Example:
 				return fmt.Errorf("marshal pack: %w", err)
 			}
 
+			// Sign the pack if a signing key is provided.
+			if signingKeyPath != "" {
+				privKey, kerr := signing.LoadPrivateKey(signingKeyPath)
+				if kerr != nil {
+					return fmt.Errorf("load signing key: %w", kerr)
+				}
+				out, err = signing.SignPackYAML(out, privKey)
+				if err != nil {
+					return fmt.Errorf("sign pack: %w", err)
+				}
+				fmt.Fprintf(os.Stderr, "OK  pack signed with %s\n", signingKeyPath)
+			}
+
 			if outFile != "" && outFile != "-" {
 				if err := os.WriteFile(outFile, out, 0o644); err != nil {
 					return fmt.Errorf("write %s: %w", outFile, err)
@@ -209,6 +225,50 @@ Example:
 	cmd.Flags().StringVar(&nodesDir, "nodes", "examples/nodes", "path to node definitions directory")
 	cmd.Flags().StringVar(&forgeURL, "forge-url", "", "Forge endpoint to include in pack exports")
 	cmd.Flags().StringVarP(&outFile, "out", "o", "-", "output file (- for stdout)")
+	cmd.Flags().StringVar(&signingKeyPath, "signing-key", "", "path to Ed25519 private key for signing the pack")
+	return cmd
+}
+
+// ── forge keygen ──────────────────────────────────────────────────────────────
+
+func keygenCmd() *cobra.Command {
+	var outPath string
+
+	cmd := &cobra.Command{
+		Use:   "keygen",
+		Short: "Generate an Ed25519 signing key pair for pack signing",
+		Long: `Generate an Ed25519 key pair for signing LocalPolicyPacks.
+
+Writes two files:
+  <out>.key     — private key (keep secret, used by forge pack --signing-key)
+  <out>.key.pub — public key  (distribute to KLIQ nodes via --policy-verify-key)
+
+Example:
+  forge keygen --out /etc/kernloom/forge-signing
+  forge pack policy.yaml --signing-key /etc/kernloom/forge-signing.key
+  kliq --policy-verify-key /etc/kernloom/forge-signing.key.pub ...`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			pub, priv, err := signing.GenerateKeyPair()
+			if err != nil {
+				return fmt.Errorf("generate key pair: %w", err)
+			}
+
+			privPath := outPath + ".key"
+			pubPath := outPath + ".key.pub"
+
+			if err := signing.SavePrivateKey(privPath, priv); err != nil {
+				return fmt.Errorf("save private key: %w", err)
+			}
+			if err := signing.SavePublicKey(pubPath, pub); err != nil {
+				return fmt.Errorf("save public key: %w", err)
+			}
+
+			fmt.Fprintf(os.Stderr, "OK  private key → %s (mode 0600)\n", privPath)
+			fmt.Fprintf(os.Stderr, "OK  public key  → %s\n", pubPath)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&outPath, "out", "forge-signing", "output path prefix (appends .key and .key.pub)")
 	return cmd
 }
 
