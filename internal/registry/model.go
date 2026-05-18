@@ -15,16 +15,29 @@ type Intent struct {
 }
 
 // Capability represents a technical enforcement or observation ability.
+// ParameterSpec declares a single allowed parameter for a capability.
+type ParameterSpec struct {
+	// Type is the expected value type: "uint", "string", "float", "bool".
+	Type string `yaml:"type"`
+	// Description explains what the parameter controls and its effect on enforcement mode.
+	Description string `yaml:"description"`
+	// Optional: when true the parameter may be absent. When false it is required.
+	Optional bool `yaml:"optional"`
+}
+
 type Capability struct {
-	ID           string   `yaml:"id"`
-	Category     string   `yaml:"category"`
-	Domain       string   `yaml:"domain"`
-	AllowedRoles []string `yaml:"allowed_roles"` // references ComponentRole IDs
+	ID                   string   `yaml:"id"`
+	Category             string   `yaml:"category"`
+	Domain               string   `yaml:"domain"`
+	AllowedRoles         []string `yaml:"allowed_roles"`
 	AllowedGranularities []string `yaml:"allowed_granularities"`
 	ProducesSignals      []string `yaml:"produces_signals"`
 	SupportsTTL          bool     `yaml:"supports_ttl"`
 	SupportsDryRun       bool     `yaml:"supports_dry_run"`
 	RiskClass            string   `yaml:"risk_class"`
+	// AllowedParameters declares which then.params keys are valid for this capability
+	// and their expected types. Absent = no parameters allowed.
+	AllowedParameters map[string]ParameterSpec `yaml:"allowed_parameters,omitempty"`
 }
 
 // Signal represents a standardised data point.

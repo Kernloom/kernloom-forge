@@ -182,6 +182,16 @@ capabilities:
     supports_ttl: true
     supports_dry_run: true
     risk_class: disruptive
+    allowed_parameters:
+      rate_pps:
+        type: uint
+        optional: true
+        description: >
+          Explicit rate limit in packets per second.
+          When present: directive (access-control) mode — KLIQ applies this
+          exact rate regardless of autotune or baseline.
+          When absent: autonomy (DoS-protection) mode — KLIQ derives the rate
+          from the autotune-learned baseline.
 
   - id: enforce.traffic.connection_limit
     category: enforce
@@ -229,6 +239,13 @@ capabilities:
     supports_ttl: true
     supports_dry_run: true
     risk_class: disruptive
+    allowed_parameters:
+      rate_pps:
+        type: uint
+        optional: true
+        description: >
+          Explicit hard rate limit in packets per second (directive mode).
+          When absent: KLIQ derives hard rate from autotune baseline.
 
   # ── Enforce: Network (legacy — prefer enforce.access.* / enforce.traffic.*) ──
 
