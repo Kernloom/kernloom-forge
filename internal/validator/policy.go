@@ -19,8 +19,8 @@ import (
 // from: "baseline" requires signal + scope + statistic.
 type PolicyBinding struct {
 	From      string `yaml:"from"`
-	ID        string `yaml:"id"`       // for from: signal
-	Signal    string `yaml:"signal"`   // for from: baseline
+	ID        string `yaml:"id"`     // for from: signal
+	Signal    string `yaml:"signal"` // for from: baseline
 	Scope     string `yaml:"scope"`
 	Statistic string `yaml:"statistic"` // for from: baseline
 }
@@ -42,9 +42,9 @@ type PolicyRequirements struct {
 	MinGranularity       []string `yaml:"min_granularity"`
 	SemanticDepth        string   `yaml:"semantic_depth"`
 	Degradation          struct {
-		Allow                  bool     `yaml:"allow"`
+		Allow                   bool     `yaml:"allow"`
 		AcceptableGranularities []string `yaml:"acceptable_granularities"`
-		RequireApproval        bool     `yaml:"require_approval"`
+		RequireApproval         bool     `yaml:"require_approval"`
 	} `yaml:"degradation"`
 }
 
@@ -283,6 +283,20 @@ func validateAction(policyID string, idx int, a *PolicyAction, reg *registry.Reg
 		if !reg.HasCapability(a.Capability) {
 			return fmt.Errorf("policy %s action[%d]: unknown capability %q", policyID, idx, a.Capability)
 		}
+		// Validate parameters against the capability's declared allowed_parameters.
+		if len(a.Parameters) > 0 {
+			cap := reg.Capabilities[a.Capability]
+			for k, v := range a.Parameters {
+				spec, ok := cap.AllowedParameters[k]
+				if !ok {
+					return fmt.Errorf("policy %s action[%d]: parameter %q not allowed for capability %q",
+						policyID, idx, k, a.Capability)
+				}
+				if err := validateParamValue(k, v, spec.Type); err != nil {
+					return fmt.Errorf("policy %s action[%d]: parameter %q: %w", policyID, idx, k, err)
+				}
+			}
+		}
 
 	case "intent_action":
 		if a.Intent == "" {
@@ -305,5 +319,39 @@ func validateAction(policyID string, idx int, a *PolicyAction, reg *registry.Reg
 		return fmt.Errorf("policy %s action[%d]: unknown action type %q", policyID, idx, a.Type)
 	}
 
+	return nil
+}
+
+// validateParamValue checks that val matches the expected type string.
+func validateParamValue(key string, val any, typ string) error {
+	switch typ {
+	case "uint":
+		switch v := val.(type) {
+		case int:
+			if v < 0 {
+				return fmt.Errorf("must be >= 0, got %d", v)
+			}
+		case float64:
+			if v < 0 || float64(int64(v)) != v {
+				return fmt.Errorf("must be a non-negative integer, got %g", v)
+			}
+		default:
+			return fmt.Errorf("must be a uint (integer), got %T", val)
+		}
+	case "string":
+		if _, ok := val.(string); !ok {
+			return fmt.Errorf("must be a string, got %T", val)
+		}
+	case "float":
+		switch val.(type) {
+		case int, float64:
+		default:
+			return fmt.Errorf("must be a number, got %T", val)
+		}
+	case "bool":
+		if _, ok := val.(bool); !ok {
+			return fmt.Errorf("must be a bool, got %T", val)
+		}
+	}
 	return nil
 }
