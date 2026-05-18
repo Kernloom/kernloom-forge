@@ -62,20 +62,17 @@ func TestRenderMitigateConnectionSpike(t *testing.T) {
 		t.Errorf("name: got %q", pack.Metadata.Name)
 	}
 
-	// Must have at least one rule for the rate_limit action.
+	// Must have at least one rule using the Forge capability ID verbatim.
 	if len(pack.Spec.Rules) == 0 {
 		t.Fatal("expected at least one rule")
 	}
-	// Rule must use the Forge capability ID verbatim — not a KLIQ-internal ID.
 	foundRateLimit := false
 	for _, rule := range pack.Spec.Rules {
 		if rule.Then.Capability == "enforce.traffic.rate_limit" {
 			foundRateLimit = true
-			if rule.When.FsmLevel != "soft" {
-				t.Errorf("rate_limit rule fsm_level: got %q, want soft", rule.When.FsmLevel)
-			}
-			if rule.Then.Action != "rate_limit" {
-				t.Errorf("rate_limit rule action: got %q, want rate_limit", rule.Then.Action)
+			// v1.1: when.capability must be the Forge ID, no fsm_level.
+			if rule.When.Capability != "enforce.traffic.rate_limit" {
+				t.Errorf("rate_limit rule when.capability: got %q, want enforce.traffic.rate_limit", rule.When.Capability)
 			}
 		}
 	}
@@ -94,12 +91,22 @@ func TestRenderMitigateConnectionSpike(t *testing.T) {
 		t.Errorf("enforce.traffic.rate_limit not in capabilities_required: %v", pack.Spec.CapabilitiesRequired)
 	}
 
-	// max_action must be rate_limit (not block — this policy only rate-limits).
-	if pack.Spec.Autonomy.MaxAction != "rate_limit" {
-		t.Errorf("autonomy.max_action: got %q, want rate_limit", pack.Spec.Autonomy.MaxAction)
+	// v1.1: action_authorization.allowed_capabilities replaces autonomy.max_action.
+	// A rate_limit-only policy must not include enforce.access.deny.
+	hasBlock := false
+	for _, cap := range pack.Spec.ActionAuthorization.AllowedCapabilities {
+		if cap == "enforce.access.deny" {
+			hasBlock = true
+		}
 	}
-	if pack.Spec.Autonomy.AllowLocalBlock {
-		t.Error("allow_local_block should be false for a rate_limit policy")
+	if hasBlock {
+		t.Error("rate_limit policy must not include enforce.access.deny in allowed_capabilities")
+	}
+	if len(pack.Spec.ActionAuthorization.AllowedCapabilities) == 0 {
+		t.Error("action_authorization.allowed_capabilities must not be empty")
+	}
+	if pack.Spec.ActionAuthorization.DefaultEffect != "deny" {
+		t.Errorf("default_effect: got %q, want deny", pack.Spec.ActionAuthorization.DefaultEffect)
 	}
 }
 
@@ -111,12 +118,16 @@ func TestRenderDOSPrevention(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RenderLocalPolicyPack: %v", err)
 	}
-	// DOS policy uses enforce.network.deny → block level.
-	if result.Pack.Spec.Autonomy.MaxAction != "block" {
-		t.Errorf("dos-prevention max_action: got %q, want block", result.Pack.Spec.Autonomy.MaxAction)
+	// v1.1: DOS policy uses enforce.network.deny → block capability must be in allowed_capabilities.
+	hasBlockCap := false
+	for _, cap := range result.Pack.Spec.ActionAuthorization.AllowedCapabilities {
+		if cap == "enforce.network.deny" || cap == "enforce.access.deny" {
+			hasBlockCap = true
+		}
 	}
-	if !result.Pack.Spec.Autonomy.AllowLocalBlock {
-		t.Error("dos-prevention should have allow_local_block=true")
+	if !hasBlockCap {
+		t.Errorf("dos-prevention allowed_capabilities should contain a block capability, got: %v",
+			result.Pack.Spec.ActionAuthorization.AllowedCapabilities)
 	}
 }
 
@@ -133,16 +144,19 @@ func TestRenderQuarantineSourceOnlyIntentAction(t *testing.T) {
 	}
 }
 
-func TestRenderWithDryRun(t *testing.T) {
+func TestRenderNoDryRunInPack(t *testing.T) {
+	// dry_run is an operational flag that belongs in KliqDeploymentConfig.
+	// Forge must never write it into a rendered pack.
 	reg := loadReg(t)
 	policy := loadPolicy(t, reg, "mitigate-connection-spike.yaml")
 
-	result, err := packs.RenderLocalPolicyPack(packs.RenderRequest{Policy: policy, DryRun: true})
+	result, err := packs.RenderLocalPolicyPack(packs.RenderRequest{Policy: policy})
 	if err != nil {
 		t.Fatalf("RenderLocalPolicyPack: %v", err)
 	}
-	if !result.Pack.Spec.Autonomy.DryRun {
-		t.Error("expected dry_run=true")
+	// Verify the pack renders without error and has action_authorization + rules.
+	if len(result.Pack.Spec.ActionAuthorization.AllowedCapabilities) == 0 && len(result.Pack.Spec.Rules) == 0 {
+		t.Error("expected non-empty action_authorization or rules")
 	}
 }
 
@@ -168,28 +182,24 @@ func TestRenderWithForgeURL(t *testing.T) {
 // ── Unit tests with in-code fixtures ─────────────────────────────────────────
 
 func TestRenderCapabilityMapping(t *testing.T) {
-	cases := []struct {
-		forgeCapability string
-		wantKLIQ        string
-		wantFSMLevel    string
-		wantAction      string
-	}{
-		// Forge capability ID → expected output (Forge ID passed through, FSM level derived)
-		{"enforce.traffic.rate_limit", "enforce.traffic.rate_limit", "soft", "rate_limit"},
-		{"enforce.access.deny", "enforce.access.deny", "block", "block"},
-		{"enforce.traffic.drop", "enforce.traffic.drop", "block", "block"},
-		{"enforce.traffic.quarantine", "enforce.traffic.quarantine", "block", "block"},
-		{"enforce.access.allow", "enforce.access.allow", "observe", "allow"},
-		{"enforce.network.deny", "enforce.network.deny", "block", "block"},
-		{"enforce.network.rate_limit", "enforce.network.rate_limit", "soft", "rate_limit"},
+	// v1.1: Forge capability IDs pass through verbatim into when.capability and
+	// then.capability. No fsm_level or action shorthand in output.
+	cases := []string{
+		"enforce.traffic.rate_limit",
+		"enforce.access.deny",
+		"enforce.traffic.drop",
+		"enforce.traffic.quarantine",
+		"enforce.access.allow",
+		"enforce.network.deny",
+		"enforce.network.rate_limit",
 	}
 
-	for _, tc := range cases {
-		t.Run(tc.forgeCapability, func(t *testing.T) {
+	for _, forgeCapID := range cases {
+		t.Run(forgeCapID, func(t *testing.T) {
 			policy := validator.Policy{Kind: "RuntimePolicy"}
 			policy.Metadata.ID = "test-mapping"
 			policy.Then = []validator.PolicyAction{
-				{Type: "capability_action", Capability: tc.forgeCapability},
+				{Type: "capability_action", Capability: forgeCapID},
 			}
 
 			result, err := packs.RenderLocalPolicyPack(packs.RenderRequest{Policy: policy})
@@ -200,14 +210,23 @@ func TestRenderCapabilityMapping(t *testing.T) {
 				t.Fatal("no rules generated")
 			}
 			rule := result.Pack.Spec.Rules[0]
-			if rule.Then.Capability != tc.wantKLIQ {
-				t.Errorf("capability: got %q, want %q", rule.Then.Capability, tc.wantKLIQ)
+			// then.capability must be the Forge ID unchanged.
+			if rule.Then.Capability != forgeCapID {
+				t.Errorf("then.capability: got %q, want %q", rule.Then.Capability, forgeCapID)
 			}
-			if rule.When.FsmLevel != tc.wantFSMLevel {
-				t.Errorf("fsm_level: got %q, want %q", rule.When.FsmLevel, tc.wantFSMLevel)
+			// when.capability must also be the Forge ID — no fsm_level.
+			if rule.When.Capability != forgeCapID {
+				t.Errorf("when.capability: got %q, want %q", rule.When.Capability, forgeCapID)
 			}
-			if rule.Then.Action != tc.wantAction {
-				t.Errorf("action: got %q, want %q", rule.Then.Action, tc.wantAction)
+			// action_authorization must include this capability.
+			found := false
+			for _, c := range result.Pack.Spec.ActionAuthorization.AllowedCapabilities {
+				if c == forgeCapID {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("%q not in action_authorization.allowed_capabilities", forgeCapID)
 			}
 		})
 	}
@@ -218,7 +237,7 @@ func TestRenderUnknownCapabilityWarned(t *testing.T) {
 	policy.Metadata.ID = "test-unknown-cap"
 	policy.Then = []validator.PolicyAction{
 		{Type: "capability_action", Capability: "analyze.baseline.compare"}, // no KLIQ mapping
-		{Type: "capability_action", Capability: "enforce.access.deny"},       // has mapping
+		{Type: "capability_action", Capability: "enforce.access.deny"},      // has mapping
 	}
 
 	result, err := packs.RenderLocalPolicyPack(packs.RenderRequest{Policy: policy})
@@ -248,8 +267,8 @@ func TestRenderNoMappableCapabilities(t *testing.T) {
 	}
 }
 
-func TestRenderMaxActionEscalation(t *testing.T) {
-	// Mixed policy: one rate_limit + one block → max_action must be block.
+func TestRenderAllowedCapabilitiesEscalation(t *testing.T) {
+	// Mixed policy: rate_limit + block → both capabilities must appear in allowed_capabilities.
 	policy := validator.Policy{Kind: "RuntimePolicy"}
 	policy.Metadata.ID = "test-mixed"
 	policy.Then = []validator.PolicyAction{
@@ -261,11 +280,21 @@ func TestRenderMaxActionEscalation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RenderLocalPolicyPack: %v", err)
 	}
-	if result.Pack.Spec.Autonomy.MaxAction != "block" {
-		t.Errorf("mixed policy: max_action should be block, got %q", result.Pack.Spec.Autonomy.MaxAction)
+	allowed := result.Pack.Spec.ActionAuthorization.AllowedCapabilities
+	hasRL, hasBlock := false, false
+	for _, c := range allowed {
+		if c == "enforce.traffic.rate_limit" {
+			hasRL = true
+		}
+		if c == "enforce.access.deny" {
+			hasBlock = true
+		}
 	}
-	if !result.Pack.Spec.Autonomy.AllowLocalBlock {
-		t.Error("mixed policy: allow_local_block should be true")
+	if !hasRL {
+		t.Error("enforce.traffic.rate_limit missing from allowed_capabilities")
+	}
+	if !hasBlock {
+		t.Error("enforce.access.deny missing from allowed_capabilities")
 	}
 	if len(result.Pack.Spec.Rules) != 2 {
 		t.Errorf("expected 2 rules, got %d", len(result.Pack.Spec.Rules))

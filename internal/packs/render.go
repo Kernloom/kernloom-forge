@@ -45,21 +45,27 @@ type PackMetadata struct {
 }
 
 type PackSpec struct {
-	TargetSelector       PackTargetSelector `yaml:"target_selector,omitempty"`
-	CapabilitiesRequired []string           `yaml:"capabilities_required,omitempty"`
-	Autonomy             PackAutonomy       `yaml:"autonomy"`
-	Rules                []PackRule         `yaml:"rules"`
-	Exports              PackExports        `yaml:"exports,omitempty"`
+	TargetSelector       PackTargetSelector      `yaml:"target_selector,omitempty"`
+	CapabilitiesRequired []string                `yaml:"capabilities_required,omitempty"`
+	ActionAuthorization  PackActionAuthorization `yaml:"action_authorization,omitempty"`
+	Rules                []PackRule              `yaml:"rules"`
+	Exports              PackExports             `yaml:"exports,omitempty"`
 }
 
 type PackTargetSelector struct {
 	MatchLabels map[string]string `yaml:"match_labels,omitempty"`
 }
 
-type PackAutonomy struct {
-	DryRun          bool   `yaml:"dry_run"`
-	MaxAction       string `yaml:"max_action"`
-	AllowLocalBlock bool   `yaml:"allow_local_block"`
+// PackActionAuthorization is the v1.1 enforcement ceiling section.
+// It replaces the v1.0 autonomy section: capability IDs are used throughout,
+// no KLIQ-internal shorthands (max_action, allow_local_block) are emitted.
+// KLIQ derives the enforcement ceiling from AllowedCapabilities directly.
+type PackActionAuthorization struct {
+	// AllowedCapabilities is the explicit set of Forge capability IDs this
+	// policy authorises. KLIQ caps enforcement to the highest-severity entry.
+	AllowedCapabilities []string `yaml:"allowed_capabilities,omitempty"`
+	// DefaultEffect is "deny" — capabilities not in the list are refused.
+	DefaultEffect string `yaml:"default_effect,omitempty"`
 }
 
 type PackRule struct {
@@ -68,16 +74,17 @@ type PackRule struct {
 	Then PackThen `yaml:"then"`
 }
 
+// PackWhen is the v1.1 trigger: a Forge capability ID.
+// KLIQ maps the capability to its internal FSM level; Forge has no knowledge
+// of KLIQ-internal level names (soft/hard/block).
 type PackWhen struct {
-	// FsmLevel is a KLIQ-internal enforcement trigger concept.
-	// Forge sets it based on the severity of the mapped capability.
-	// KLIQ decides WHEN to reach each level via its signal engine.
-	FsmLevel string `yaml:"fsm_level,omitempty"`
-	Signal   string `yaml:"signal,omitempty"`
+	Capability string `yaml:"capability,omitempty"` // Forge capability ID
+	Signal     string `yaml:"signal,omitempty"`
 }
 
+// PackThen carries the enforcement effect in pure Forge vocabulary.
+// The v1.0 action shorthand is gone; the capability ID is the full descriptor.
 type PackThen struct {
-	Action     string            `yaml:"action"`
 	Capability string            `yaml:"capability"` // Forge vocabulary ID
 	TTL        string            `yaml:"ttl,omitempty"`
 	Params     map[string]string `yaml:"params,omitempty"`
@@ -92,42 +99,35 @@ type PackExportTarget struct {
 	Endpoint string `yaml:"endpoint,omitempty"`
 }
 
-// ── FSM level table ───────────────────────────────────────────────────────────
-// Maps Forge capability IDs to the KLIQ FSM enforcement level and action name.
-// Forge capability IDs are passed through unchanged to then.capability —
-// KLIQ translates them to adapter calls via its own normalisation table.
-// This table only determines the enforcement SEVERITY (which FSM level).
+// ── Capability severity table ─────────────────────────────────────────────────
+// Maps Forge capability IDs to an enforcement severity used INTERNALLY by the
+// renderer to determine the AllowedCapabilities list and DefaultEffect.
+// Nothing from this table is written to the pack output — Forge vocabulary IDs
+// are passed through verbatim; KLIQ owns the FSM-level mapping.
 
-type capLevel struct {
-	fsmLevel string // soft | hard | block | observe
-	action   string // rate_limit | block | allow | observe
-}
+// capabilitySeverity maps Forge capability IDs to severity (0=observe … 3=block).
+var capabilitySeverity = map[string]int{
+	// observe / allow
+	"enforce.access.allow": 0,
 
-var forgeFSMLevel = map[string]capLevel{
-	// enforce.access.*
-	"enforce.access.deny":         {fsmLevel: "block", action: "block"},
-	"enforce.access.allow":        {fsmLevel: "observe", action: "allow"},
-	"enforce.access.default_deny": {fsmLevel: "block", action: "block"},
+	// soft rate-limit
+	"enforce.traffic.rate_limit":       1,
+	"enforce.traffic.connection_limit": 1,
+	"enforce.traffic.bandwidth_limit":  1,
+	"enforce.network.rate_limit":       1,
+	"enforce.network.syn_protect":      1,
 
-	// enforce.traffic.*
-	"enforce.traffic.rate_limit":       {fsmLevel: "soft", action: "rate_limit"},
-	"enforce.traffic.connection_limit": {fsmLevel: "soft", action: "rate_limit"},
-	"enforce.traffic.bandwidth_limit":  {fsmLevel: "soft", action: "rate_limit"},
-	"enforce.traffic.drop":             {fsmLevel: "block", action: "block"},
-	"enforce.traffic.quarantine":       {fsmLevel: "block", action: "block"},
-	"enforce.traffic.tarpit":           {fsmLevel: "hard", action: "rate_limit"},
+	// hard rate-limit / tarpit
+	"enforce.traffic.tarpit": 2,
 
-	// enforce.network.* (legacy)
-	"enforce.network.deny":         {fsmLevel: "block", action: "block"},
-	"enforce.network.rate_limit":   {fsmLevel: "soft", action: "rate_limit"},
-	"enforce.network.default_deny": {fsmLevel: "block", action: "block"},
-	"enforce.network.quarantine":   {fsmLevel: "block", action: "block"},
-	"enforce.network.syn_protect":  {fsmLevel: "soft", action: "rate_limit"},
-}
-
-// fsmLevelOrder is used to determine the highest enforcement level in a policy.
-var fsmLevelOrder = map[string]int{
-	"observe": 0, "soft": 1, "hard": 2, "block": 3,
+	// block / drop
+	"enforce.access.deny":          3,
+	"enforce.access.default_deny":  3,
+	"enforce.traffic.drop":         3,
+	"enforce.traffic.quarantine":   3,
+	"enforce.network.deny":         3,
+	"enforce.network.default_deny": 3,
+	"enforce.network.quarantine":   3,
 }
 
 // ── RenderRequest / RenderResult ─────────────────────────────────────────────
@@ -135,7 +135,6 @@ var fsmLevelOrder = map[string]int{
 // RenderRequest is the input to RenderLocalPolicyPack.
 type RenderRequest struct {
 	Policy   validator.Policy
-	DryRun   bool
 	ForgeURL string // optional: endpoint for status exports
 }
 
@@ -162,24 +161,24 @@ func RenderLocalPolicyPack(req RenderRequest) (*RenderResult, error) {
 	result := &RenderResult{}
 	var rules []PackRule
 	capsRequired := map[string]bool{}
-	maxLevel := "observe"
+	maxSeverity := 0
 
 	for i, action := range p.Then {
 		if action.Type != "capability_action" {
 			continue
 		}
-		level, ok := forgeFSMLevel[action.Capability]
+		sev, ok := capabilitySeverity[action.Capability]
 		if !ok {
 			result.Warnings = append(result.Warnings,
-				fmt.Sprintf("action[%d]: capability %q has no FSM level mapping — skipped", i, action.Capability))
+				fmt.Sprintf("action[%d]: capability %q has no severity mapping — skipped", i, action.Capability))
 			continue
 		}
 
 		rule := PackRule{
 			Name: fmt.Sprintf("forge-%s-%s", slugify(p.Metadata.ID), slugify(action.Capability)),
-			When: PackWhen{FsmLevel: level.fsmLevel},
+			// when.capability uses the Forge ID directly — no KLIQ-internal level names.
+			When: PackWhen{Capability: action.Capability},
 			Then: PackThen{
-				Action:     level.action,
 				Capability: action.Capability, // Forge ID passed through verbatim
 				TTL:        extractTTL(action),
 			},
@@ -190,8 +189,8 @@ func RenderLocalPolicyPack(req RenderRequest) (*RenderResult, error) {
 		rules = append(rules, rule)
 		capsRequired[action.Capability] = true
 
-		if fsmLevelOrder[level.fsmLevel] > fsmLevelOrder[maxLevel] {
-			maxLevel = level.fsmLevel
+		if sev > maxSeverity {
+			maxSeverity = sev
 		}
 	}
 
@@ -200,7 +199,19 @@ func RenderLocalPolicyPack(req RenderRequest) (*RenderResult, error) {
 			"ensure then: contains capability_action (not intent_action) entries", p.Metadata.ID)
 	}
 
-	labels := map[string]string{"forge.policy_id": p.Metadata.ID}
+	// Detect enforcement mode: directive when any rule carries an explicit rate_pps.
+	enforcementMode := "autonomy"
+	for _, rule := range rules {
+		if _, ok := rule.Then.Params["rate_pps"]; ok {
+			enforcementMode = "directive"
+			break
+		}
+	}
+
+	labels := map[string]string{
+		"forge.policy_id":        p.Metadata.ID,
+		"forge.enforcement_mode": enforcementMode,
+	}
 	if p.Intent != "" {
 		labels["forge.intent"] = p.Intent
 	}
@@ -215,14 +226,16 @@ func RenderLocalPolicyPack(req RenderRequest) (*RenderResult, error) {
 		},
 		Spec: PackSpec{
 			CapabilitiesRequired: sortedKeys(capsRequired),
-			Autonomy: PackAutonomy{
-				DryRun:          req.DryRun,
-				MaxAction:       maxActionFrom(maxLevel),
-				AllowLocalBlock: maxLevel == "block",
+			// AllowedCapabilities = every capability the policy exercises.
+			// KLIQ derives the enforcement ceiling from this list — no max_action shorthand.
+			ActionAuthorization: PackActionAuthorization{
+				AllowedCapabilities: sortedKeys(capsRequired),
+				DefaultEffect:       "deny",
 			},
 			Rules: rules,
 		},
 	}
+	_ = maxSeverity // available for future use (e.g. threat-level annotation)
 
 	if req.ForgeURL != "" {
 		pack.Spec.Exports = PackExports{
@@ -246,17 +259,6 @@ func extractTTL(action validator.PolicyAction) string {
 		}
 	}
 	return ""
-}
-
-func maxActionFrom(fsmLevel string) string {
-	switch fsmLevel {
-	case "block", "hard":
-		return "block"
-	case "soft":
-		return "rate_limit"
-	default:
-		return "observe"
-	}
 }
 
 func stringifyParams(params map[string]any) map[string]string {
@@ -287,11 +289,11 @@ func sortedKeys(m map[string]bool) []string {
 }
 
 // SupportedForgeCapabilities returns the Forge capability IDs the renderer
-// knows how to map to FSM levels.
+// knows how to handle (i.e. has a severity mapping for).
 func SupportedForgeCapabilities() []string {
 	return sortedKeys(func() map[string]bool {
-		m := make(map[string]bool, len(forgeFSMLevel))
-		for k := range forgeFSMLevel {
+		m := make(map[string]bool, len(capabilitySeverity))
+		for k := range capabilitySeverity {
 			m[k] = true
 		}
 		return m
