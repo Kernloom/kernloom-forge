@@ -17,10 +17,13 @@ type NodeEnrollmentRequest struct {
 }
 
 // NodeEnrollmentResponse is returned by Forge after enrollment.
+// SessionToken is a per-node credential for all subsequent requests —
+// it replaces the one-time enrollment token after first use.
 type NodeEnrollmentResponse struct {
-	NodeID  string `json:"node_id"`
-	Status  string `json:"status"`            // pending | approved | rejected
-	Message string `json:"message,omitempty"` // human-readable reason
+	NodeID       string `json:"node_id"`
+	Status       string `json:"status"`                 // pending | approved | rejected
+	SessionToken string `json:"session_token"`          // use for heartbeat + pack-pull
+	Message      string `json:"message,omitempty"`
 }
 
 // ── Heartbeat ─────────────────────────────────────────────────────────────────

@@ -43,4 +43,7 @@ Thumbs.db
 
 # Claude AI working files (not part of the codebase)
 .claude/*
-!.claude/CLAUDE.md
+.claude/CLAUDE.md
+
+# Local documentation drafts (not committed — use docs/ for committed docs)
+_docs/

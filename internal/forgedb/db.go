@@ -44,7 +44,16 @@ func applySchema(db *sql.DB) error {
 		mode          TEXT NOT NULL,
 		status        TEXT NOT NULL DEFAULT 'pending',
 		enrolled_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-		last_seen     DATETIME
+		last_seen     DATETIME,
+		session_token TEXT
+	);
+
+	CREATE TABLE IF NOT EXISTS enrollment_tokens (
+		token      TEXT PRIMARY KEY,
+		node_id    TEXT,
+		used_at    DATETIME,
+		expires_at DATETIME NOT NULL,
+		created_by TEXT NOT NULL DEFAULT 'operator'
 	);
 
 	CREATE TABLE IF NOT EXISTS node_inventory (
@@ -103,6 +112,7 @@ const (
 	NodePending  NodeStatus = "pending"
 	NodeApproved NodeStatus = "approved"
 	NodeRejected NodeStatus = "rejected"
+	NodeRevoked  NodeStatus = "revoked"
 )
 
 // Node is the stored representation of an enrolled KLIQ instance.
@@ -176,6 +186,90 @@ func (d *DB) ListNodes() ([]Node, error) {
 func (d *DB) ApproveNode(id string) error {
 	_, err := d.db.Exec(`UPDATE nodes SET status='approved' WHERE id=?`, id)
 	return err
+}
+
+// RevokeNode sets a node's status to revoked — no pack delivery, no heartbeats accepted.
+func (d *DB) RevokeNode(id string) error {
+	_, err := d.db.Exec(`UPDATE nodes SET status='revoked' WHERE id=?`, id)
+	return err
+}
+
+// SetSessionToken stores a node-specific session token generated at enrollment.
+func (d *DB) SetSessionToken(nodeID, token string) error {
+	_, err := d.db.Exec(`UPDATE nodes SET session_token=? WHERE id=?`, token, nodeID)
+	return err
+}
+
+// ValidateSessionToken returns true when token matches the stored session token.
+func (d *DB) ValidateSessionToken(nodeID, token string) bool {
+	var stored string
+	err := d.db.QueryRow(`SELECT session_token FROM nodes WHERE id=? AND status!='revoked'`, nodeID).Scan(&stored)
+	return err == nil && stored == token
+}
+
+// ── Enrollment Tokens ─────────────────────────────────────────────────────────
+
+// CreateEnrollmentToken stores a new one-time enrollment token.
+func (d *DB) CreateEnrollmentToken(token, nodeID string, expiresAt time.Time) error {
+	var nodeIDVal any = nodeID
+	if nodeID == "" {
+		nodeIDVal = nil
+	}
+	_, err := d.db.Exec(`
+		INSERT INTO enrollment_tokens(token, node_id, expires_at)
+		VALUES (?, ?, ?)
+	`, token, nodeIDVal, expiresAt.UTC().Format(time.DateTime))
+	return err
+}
+
+// UseEnrollmentToken validates and marks a token as used atomically.
+// Returns the optional pre-set node_id (may be empty for open tokens).
+// Returns error when token is invalid, expired, or already used.
+func (d *DB) UseEnrollmentToken(token string) (nodeID string, err error) {
+	var usedAt sql.NullString
+	var expiresStr string
+	var nodeIDVal sql.NullString
+	row := d.db.QueryRow(`SELECT node_id, used_at, expires_at FROM enrollment_tokens WHERE token=?`, token)
+	if err = row.Scan(&nodeIDVal, &usedAt, &expiresStr); err != nil {
+		return "", fmt.Errorf("invalid enrollment token")
+	}
+	if usedAt.Valid {
+		return "", fmt.Errorf("enrollment token already used")
+	}
+	expires, _ := time.Parse(time.DateTime, expiresStr)
+	if time.Now().UTC().After(expires) {
+		return "", fmt.Errorf("enrollment token expired")
+	}
+	_, err = d.db.Exec(`UPDATE enrollment_tokens SET used_at=CURRENT_TIMESTAMP WHERE token=?`, token)
+	if err != nil {
+		return "", err
+	}
+	if nodeIDVal.Valid {
+		nodeID = nodeIDVal.String
+	}
+	return nodeID, nil
+}
+
+// ListEnrollmentTokens returns all tokens for display.
+func (d *DB) ListEnrollmentTokens() ([]map[string]string, error) {
+	rows, err := d.db.Query(`
+		SELECT token, COALESCE(node_id,''), COALESCE(used_at,''), expires_at
+		FROM enrollment_tokens ORDER BY expires_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []map[string]string
+	for rows.Next() {
+		var tok, nid, usedAt, exp string
+		if err := rows.Scan(&tok, &nid, &usedAt, &exp); err != nil {
+			return nil, err
+		}
+		result = append(result, map[string]string{
+			"token": tok[:8] + "...", "node_id": nid, "used_at": usedAt, "expires_at": exp,
+		})
+	}
+	return result, rows.Err()
 }
 
 // ── Inventory + Config ────────────────────────────────────────────────────────
