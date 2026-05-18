@@ -58,7 +58,7 @@ type NodeDefinition struct {
 	OptionalCapabilities []AdapterCapability `yaml:"optional_capabilities"`
 	Constraints          map[string]any      `yaml:"constraints"`
 	SelectionTraits      map[string]string   `yaml:"selection_traits"`
-	SignalsProduced       []string            `yaml:"signals_produced"` // v1alpha1 legacy
+	SignalsProduced      []string            `yaml:"signals_produced"` // v1alpha1 legacy
 }
 
 // effectiveRoles returns the adapter's roles for validation, falling back to
@@ -93,9 +93,9 @@ func ValidateAdapter(m *NodeDefinition, reg *registry.Registry) error {
 
 	// Accept NodeDefinition (v1alpha2); AdapterDefinition and AdapterManifest are deprecated aliases.
 	validKinds := map[string]bool{
-		"NodeDefinition":   true,
+		"NodeDefinition":    true,
 		"AdapterDefinition": true, // renamed → NodeDefinition
-		"AdapterManifest":  true,  // v1alpha1 original name
+		"AdapterManifest":   true, // v1alpha1 original name
 	}
 	if m.Kind != "" && !validKinds[m.Kind] {
 		return fmt.Errorf("node %s: unknown kind %q (expected NodeDefinition)", m.Metadata.ID, m.Kind)

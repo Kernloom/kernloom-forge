@@ -159,8 +159,8 @@ func TestV2MapsToValidated(t *testing.T) {
 	m.Adapter.Roles = []string{"pep"}
 	m.Capabilities = []validator.AdapterCapability{
 		{
-			ID:     "enforce.access.deny",
-			MapsTo: []string{"enforce.network.deny"},
+			ID:          "enforce.access.deny",
+			MapsTo:      []string{"enforce.network.deny"},
 			Granularity: []string{"src_ip"},
 		},
 	}
