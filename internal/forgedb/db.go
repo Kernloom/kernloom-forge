@@ -914,6 +914,13 @@ func (d *DB) GetNodeDefinition(nodeID string) (*AdapterDefinition, []byte, error
 	return &def, content, nil
 }
 
+// GetNodeInventoryJSON returns the raw inventory JSON stored at enrollment, or "".
+func (d *DB) GetNodeInventoryJSON(nodeID string) string {
+	var j string
+	_ = d.db.QueryRow(`SELECT inventory_json FROM node_inventory WHERE node_id = ?`, nodeID).Scan(&j)
+	return j
+}
+
 // IsNodeAutoEligible returns true when the node has opted into auto-assignment.
 func (d *DB) IsNodeAutoEligible(nodeID string) bool {
 	var v int

@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -1967,7 +1968,7 @@ func hashContent(b []byte) string {
 func adapterDefCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "adapter",
-		Short: "Adapter definition operations (capability declarations per adapter type)",
+		Short: "Adapter definition operations",
 		Long: `Manage canonical adapter definitions stored in the Forge database.
 
 Adapter definitions (registries/adapters/*.yaml) declare what each adapter
@@ -1981,6 +1982,7 @@ Use these commands for manual inspection and assignment.`,
 	cmd.AddCommand(adapterListCmd())
 	cmd.AddCommand(adapterShowCmd())
 	cmd.AddCommand(adapterAssignCmd())
+	cmd.AddCommand(adapterAutoAssignCmd())
 	cmd.AddCommand(adapterEnableAutoCmd())
 	return cmd
 }
@@ -2159,6 +2161,91 @@ Example:
 	cmd.Flags().StringVar(&definition, "definition", "", "adapter definition ID (e.g. klshield, kliq, tcp-proxy)")
 	_ = cmd.MarkFlagRequired("definition")
 	return cmd
+}
+
+func adapterAutoAssignCmd() *cobra.Command {
+	var dbPath string
+	cmd := &cobra.Command{
+		Use:   "auto-assign <node-id>",
+		Short: "Match stored inventory against definitions and assign (no re-enrollment needed)",
+		Long: `Reads the inventory stored at enrollment and matches it against registered
+adapter definitions via plugin_match. Useful for nodes that enrolled before
+adapter definitions existed, or after adding a new definition.
+
+Works regardless of the auto_eligible flag — this is a one-time operator action.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			nodeID := args[0]
+			db, err := forgedb.Open(dbPath)
+			if err != nil {
+				return err
+			}
+			defer db.Close()
+
+			// Check if already assigned.
+			if def, _, _ := db.GetNodeDefinition(nodeID); def != nil {
+				fmt.Fprintf(os.Stderr, "node %s already has definition %q assigned by %q\n",
+					nodeID, def.ID, def.RegisteredAt)
+				fmt.Fprintf(os.Stderr, "Use 'forge adapter assign' to override.\n")
+				return nil
+			}
+
+			// Read stored inventory JSON.
+			invJSON := db.GetNodeInventoryJSON(nodeID)
+			if invJSON == "" {
+				return fmt.Errorf("no inventory found for node %q — node may not have sent inventory at enrollment", nodeID)
+			}
+
+			// Extract plugin IDs from the JSON.
+			var inv map[string]any
+			if err := json.Unmarshal([]byte(invJSON), &inv); err != nil {
+				return fmt.Errorf("parse inventory: %w", err)
+			}
+			pluginIDs := extractPluginIDsFromMap(inv)
+			if len(pluginIDs) == 0 {
+				return fmt.Errorf("no plugin IDs found in inventory for node %q\nInventory: %s", nodeID, invJSON)
+			}
+
+			for _, pluginID := range pluginIDs {
+				defID, err := db.FindDefinitionByPlugin(pluginID)
+				if err != nil {
+					continue
+				}
+				if defID == "" {
+					continue
+				}
+				if err := db.AssignAdapterDefinition(nodeID, defID, "operator"); err != nil {
+					return fmt.Errorf("assign definition: %w", err)
+				}
+				fmt.Fprintf(os.Stderr, "OK  node %s → definition %s (matched plugin=%s)\n", nodeID, defID, pluginID)
+				return nil
+			}
+			return fmt.Errorf("no matching definition found for node %q\nplugin IDs in inventory: %v\nRun 'forge adapter list' to see known definitions", nodeID, pluginIDs)
+		},
+	}
+	cmd.Flags().StringVar(&dbPath, "db", "/var/lib/kernloom/forge.db", "path to forge database")
+	return cmd
+}
+
+// extractPluginIDsFromMap extracts plugin IDs from a decoded inventory map.
+// Shared between the CLI and the API handler.
+func extractPluginIDsFromMap(m map[string]any) []string {
+	var ids []string
+	if cb, ok := m["controlled_by"].(map[string]any); ok {
+		if p, ok := cb["plugin_adapter"].(string); ok && p != "" {
+			ids = append(ids, p)
+		}
+	}
+	if adapters, ok := m["adapters"].([]any); ok {
+		for _, a := range adapters {
+			if am, ok := a.(map[string]any); ok {
+				if plugin, ok := am["plugin"].(string); ok && plugin != "" {
+					ids = append(ids, plugin)
+				}
+			}
+		}
+	}
+	return ids
 }
 
 func adapterEnableAutoCmd() *cobra.Command {
