@@ -152,6 +152,28 @@ type FailoverBehavior struct {
 	Default     bool   `yaml:"default,omitempty"`
 }
 
+// MetricEntry defines one canonical metric in the Kernloom metric registry.
+type MetricEntry struct {
+	ID                  string   `yaml:"id"`
+	Domain              string   `yaml:"domain"`
+	ValueType           string   `yaml:"value_type"` // rate|ratio|count|percentile|gauge
+	Unit                string   `yaml:"unit"`
+	AllowedScopes       []string `yaml:"allowed_scopes"`
+	BaselineAllowed     bool     `yaml:"baseline_allowed"`
+	HighCardinalityRisk string   `yaml:"high_cardinality_risk"` // low|medium|high
+}
+
+// LabelPolicyEntry defines whether a label is allowed in baseline profile keys.
+type LabelPolicyEntry struct {
+	ID                    string `yaml:"id"`
+	Allowed               bool   `yaml:"allowed"`
+	Cardinality           string `yaml:"cardinality,omitempty"` // low|medium|high
+	PIIRisk               string `yaml:"pii_risk,omitempty"`
+	RequiresNormalization bool   `yaml:"requires_normalization,omitempty"`
+	Description           string `yaml:"description,omitempty"`
+	Reason                string `yaml:"reason,omitempty"` // for disallowed labels
+}
+
 // EffectType represents a canonical policy effect type.
 type EffectType struct {
 	ID              string   `yaml:"id"`
@@ -177,6 +199,8 @@ type Registry struct {
 	Granularities        map[string]*Granularity
 	Scopes               map[string]*Scope
 	ComponentRoles       map[string]*ComponentRole
+	Metrics              map[string]*MetricEntry
+	LabelPolicies        map[string]*LabelPolicyEntry
 	ComponentProfiles    map[string]*ComponentProfile
 	CompilerRules        map[string]*CompilerRule
 	BaselineStatistics   map[string]*BaselineStatistic
@@ -249,6 +273,36 @@ func (r *Registry) ConstraintValidForEffect(constraintID, effectType string) boo
 	}
 	for _, t := range c.AppliesTo {
 		if t == effectType {
+			return true
+		}
+	}
+	return false
+}
+
+// HasMetric returns true if the given metric ID is registered.
+func (r *Registry) HasMetric(id string) bool { _, ok := r.Metrics[id]; return ok }
+
+// HasLabelPolicy returns true if the given label ID has a policy entry.
+func (r *Registry) HasLabelPolicy(id string) bool { _, ok := r.LabelPolicies[id]; return ok }
+
+// IsLabelAllowed returns true when the label is explicitly allowed for use in baseline keys.
+// Returns false for unknown labels (fail-safe: unknown = not allowed).
+func (r *Registry) IsLabelAllowed(id string) bool {
+	p, ok := r.LabelPolicies[id]
+	if !ok {
+		return false
+	}
+	return p.Allowed
+}
+
+// MetricScopeAllowed returns true when scope is in the metric's allowed_scopes list.
+func (r *Registry) MetricScopeAllowed(metricID, scope string) bool {
+	m, ok := r.Metrics[metricID]
+	if !ok {
+		return false
+	}
+	for _, s := range m.AllowedScopes {
+		if s == scope {
 			return true
 		}
 	}

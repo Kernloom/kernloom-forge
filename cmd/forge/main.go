@@ -97,6 +97,7 @@ func registryListCmd() *cobra.Command {
 		"effect_types", "policy_contexts",
 		"action_constraints", "trust_assurance_levels",
 		"decision_modes", "failover_behaviors",
+		"metrics", "label_policies",
 	}
 	cmd := &cobra.Command{
 		Use:   "list [registry-name]",
@@ -134,6 +135,8 @@ Example:
 					{"trust_assurance_levels", fmt.Sprintf("%d", len(reg.TrustAssuranceLevels)), "Ordered trust scale (unknown → attested)"},
 					{"decision_modes", fmt.Sprintf("%d", len(reg.DecisionModes)), "How local PDP interacts with Forge"},
 					{"failover_behaviors", fmt.Sprintf("%d", len(reg.FailoverBehaviors)), "Behavior when Forge is unreachable"},
+					{"metrics", fmt.Sprintf("%d", len(reg.Metrics)), "Canonical metric IDs for adapter pipeline"},
+					{"label_policies", fmt.Sprintf("%d", len(reg.LabelPolicies)), "Allowed/forbidden labels for baseline keys"},
 				}
 				fmt.Printf("%-25s  %5s  %s\n", "REGISTRY", "COUNT", "DESCRIPTION")
 				fmt.Printf("%-25s  %5s  %s\n", strings.Repeat("-", 25), "-----", strings.Repeat("-", 40))
@@ -234,6 +237,28 @@ Example:
 						def = "  [default]"
 					}
 					fmt.Printf("%-25s  risk:%-6s%s\n", id, v.Risk, def)
+				}
+			case "metrics":
+				for id, v := range reg.Metrics {
+					bline := ""
+					if v.BaselineAllowed {
+						bline = "  baseline:yes"
+					}
+					fmt.Printf("%-45s  domain:%-10s  unit:%-20s  cardinality:%-6s%s\n",
+						id, v.Domain, v.Unit, v.HighCardinalityRisk, bline)
+				}
+			case "label_policies":
+				for id, v := range reg.LabelPolicies {
+					status := "allowed"
+					extra := ""
+					if !v.Allowed {
+						status = "FORBIDDEN"
+						extra = "  reason: " + v.Reason
+					} else if v.RequiresNormalization {
+						extra = "  (normalization required)"
+					}
+					fmt.Printf("%-25s  %-10s  cardinality:%-8s  pii:%-8s%s\n",
+						id, status, v.Cardinality, v.PIIRisk, extra)
 				}
 			default:
 				return fmt.Errorf("unknown registry %q\n\nAvailable: %s", name, strings.Join(validNames, ", "))

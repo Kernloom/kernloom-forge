@@ -73,6 +73,8 @@ func LoadDir(dir string) (*Registry, error) {
 		TrustAssuranceLevels: make(map[string]*TrustAssuranceLevel),
 		DecisionModes:        make(map[string]*DecisionMode),
 		FailoverBehaviors:    make(map[string]*FailoverBehavior),
+		Metrics:              make(map[string]*MetricEntry),
+		LabelPolicies:        make(map[string]*LabelPolicyEntry),
 	}
 
 	files, err := os.ReadDir(dir)
@@ -367,6 +369,42 @@ func (r *Registry) loadFile(path string) error {
 				return fmt.Errorf("duplicate failover_behavior id: %s", item.ID)
 			}
 			r.FailoverBehaviors[item.ID] = item
+		}
+
+	case "metrics.yaml":
+		var v struct {
+			Metrics []MetricEntry `yaml:"metrics"`
+		}
+		if err := yaml.Unmarshal(data, &v); err != nil {
+			return err
+		}
+		for i := range v.Metrics {
+			item := &v.Metrics[i]
+			if item.ID == "" {
+				return fmt.Errorf("metric missing id")
+			}
+			if _, dup := r.Metrics[item.ID]; dup {
+				return fmt.Errorf("duplicate metric id: %s", item.ID)
+			}
+			r.Metrics[item.ID] = item
+		}
+
+	case "label_policies.yaml":
+		var v struct {
+			LabelPolicies []LabelPolicyEntry `yaml:"label_policies"`
+		}
+		if err := yaml.Unmarshal(data, &v); err != nil {
+			return err
+		}
+		for i := range v.LabelPolicies {
+			item := &v.LabelPolicies[i]
+			if item.ID == "" {
+				return fmt.Errorf("label_policy missing id")
+			}
+			if _, dup := r.LabelPolicies[item.ID]; dup {
+				return fmt.Errorf("duplicate label_policy id: %s", item.ID)
+			}
+			r.LabelPolicies[item.ID] = item
 		}
 	}
 	return nil
