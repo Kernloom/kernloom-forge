@@ -56,7 +56,7 @@ make build
 forge registry validate registries/core
 
 # Validate a node definition against the registry
-forge adapter validate examples/nodes/l3l4-xdp-filter.yaml
+forge node validate registries/adapters/klshield.yaml
 
 # Validate a policy
 forge policy validate examples/policies/mitigate-connection-spike.yaml
@@ -64,7 +64,7 @@ forge policy validate examples/policies/mitigate-connection-spike.yaml
 # Compile a policy against registered nodes
 forge compile examples/policies/mitigate-connection-spike.yaml \
   --registry registries/core \
-  --nodes    examples/nodes
+  --nodes    registries/adapters
 ```
 
 The compiler outputs a `CompilerDecisionReport`:
