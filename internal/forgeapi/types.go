@@ -40,8 +40,11 @@ type HeartbeatRequest struct {
 // HeartbeatResponse carries optional directives back to KLIQ.
 type HeartbeatResponse struct {
 	// PackUpdated is true when a new pack is available via GET /policy-pack.
-	PackUpdated bool   `json:"pack_updated"`
-	Message     string `json:"message,omitempty"`
+	PackUpdated bool `json:"pack_updated"`
+	// NodeStatus is the current lifecycle status of the node (pending/approved/revoked).
+	// KLIQ uses this to detect the pending→approved transition and log it.
+	NodeStatus string `json:"node_status,omitempty"`
+	Message    string `json:"message,omitempty"`
 }
 
 // ── Pack status ───────────────────────────────────────────────────────────────

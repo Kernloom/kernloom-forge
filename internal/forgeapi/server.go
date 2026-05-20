@@ -241,7 +241,14 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	_, assignedName, _ := s.db.GetAssignedPack(nodeID)
 	packUpdated := assignedName != "" && assignedName != req.PackName && node.Status == forgedb.NodeApproved
 
-	writeJSON(w, http.StatusOK, HeartbeatResponse{PackUpdated: packUpdated})
+	if node.Status == forgedb.NodeApproved && req.PackName == "" {
+		s.log.Printf("HEARTBEAT node=%s status=approved pack_updated=%v", nodeID, packUpdated)
+	}
+
+	writeJSON(w, http.StatusOK, HeartbeatResponse{
+		PackUpdated: packUpdated,
+		NodeStatus:  string(node.Status),
+	})
 }
 
 // ── GET /api/v1/nodes/{id}/policy-pack ───────────────────────────────────────

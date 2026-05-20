@@ -166,9 +166,11 @@ func (d *DB) UpsertNode(id, mode string) error {
 		INSERT INTO nodes(id, mode, status, enrolled_at)
 		VALUES (?, ?, 'pending', CURRENT_TIMESTAMP)
 		ON CONFLICT(id) DO UPDATE SET
-			mode       = excluded.mode,
-			status     = 'pending',
-			enrolled_at = excluded.enrolled_at
+			mode        = excluded.mode,
+			-- Only reset to pending when the node was previously revoked.
+			-- An approved node that re-enrolls (e.g. after restart) keeps its approval.
+			status      = CASE WHEN status = 'revoked' THEN 'pending' ELSE status END,
+			enrolled_at = CASE WHEN status = 'revoked' THEN excluded.enrolled_at ELSE enrolled_at END
 	`, id, mode)
 	return err
 }
@@ -223,8 +225,20 @@ func (d *DB) ListNodes() ([]Node, error) {
 
 // ApproveNode sets a node's status to approved.
 func (d *DB) ApproveNode(id string) error {
-	_, err := d.db.Exec(`UPDATE nodes SET status='approved' WHERE id=?`, id)
-	return err
+	res, err := d.db.Exec(`UPDATE nodes SET status='approved' WHERE id=? AND status='pending'`, id)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		// Check whether the node exists at all to give a better error.
+		var status string
+		if scanErr := d.db.QueryRow(`SELECT status FROM nodes WHERE id=?`, id).Scan(&status); scanErr != nil {
+			return fmt.Errorf("node %q not found", id)
+		}
+		return fmt.Errorf("node %q is already %s — only pending nodes can be approved", id, status)
+	}
+	return nil
 }
 
 // RevokeNode sets a node's status to revoked — no pack delivery, no heartbeats accepted.
@@ -525,15 +539,18 @@ type BundleListItem struct {
 	IssuedAt   string
 	ExpiresAt  string
 	AssignedTo string // node that currently has this bundle assigned
+	Applied    bool   // true when KLIQ has confirmed it is running this bundle
 }
 
-// ListAllBundles returns all registered runtime bundles with assignment info.
+// ListAllBundles returns all registered runtime bundles with assignment and active status.
 func (d *DB) ListAllBundles() ([]BundleListItem, error) {
 	rows, err := d.db.Query(`
 		SELECT rb.id, rb.node_id, rb.generation, length(rb.content), rb.issued_at,
-		       COALESCE(ra.node_id, '')
+		       COALESCE(ra.node_id, ''),
+		       COALESCE(rs.applied, 0)
 		FROM runtime_bundles rb
 		LEFT JOIN runtime_assignments ra ON ra.bundle_id = rb.id
+		LEFT JOIN runtime_status rs ON rs.node_id = ra.node_id AND rs.generation = rb.generation
 		ORDER BY rb.issued_at DESC
 	`)
 	if err != nil {
@@ -543,9 +560,11 @@ func (d *DB) ListAllBundles() ([]BundleListItem, error) {
 	var out []BundleListItem
 	for rows.Next() {
 		var item BundleListItem
-		if err := rows.Scan(&item.ID, &item.NodeID, &item.Generation, &item.Size, &item.IssuedAt, &item.AssignedTo); err != nil {
+		var applied int
+		if err := rows.Scan(&item.ID, &item.NodeID, &item.Generation, &item.Size, &item.IssuedAt, &item.AssignedTo, &applied); err != nil {
 			return nil, err
 		}
+		item.Applied = applied == 1
 		out = append(out, item)
 	}
 	return out, rows.Err()

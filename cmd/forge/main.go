@@ -1826,14 +1826,18 @@ func bundleListCmd() *cobra.Command {
 				default: // issued_at, newest first (already sorted by DB)
 				}
 				w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-				fmt.Fprintln(w, "ID\tNODE\tGEN\tSIZE\tASSIGNED-TO\tISSUED")
+				fmt.Fprintln(w, "ID\tNODE\tGEN\tSIZE\tASSIGNED-TO\tACTIVE\tISSUED")
 				for _, b := range bundles {
 					assigned := b.AssignedTo
 					if assigned == "" {
 						assigned = "-"
 					}
-					fmt.Fprintf(w, "%s\t%s\t%d\t%d B\t%s\t%s\n",
-						b.ID, b.NodeID, b.Generation, b.Size, assigned, b.IssuedAt)
+					active := "-"
+					if b.Applied {
+						active = "yes"
+					}
+					fmt.Fprintf(w, "%s\t%s\t%d\t%d B\t%s\t%s\t%s\n",
+						b.ID, b.NodeID, b.Generation, b.Size, assigned, active, b.IssuedAt)
 				}
 				w.Flush()
 				return nil
