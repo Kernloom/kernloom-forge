@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite" // pure-Go SQLite driver
@@ -29,7 +30,33 @@ func Open(path string) (*DB, error) {
 		db.Close()
 		return nil, fmt.Errorf("forgedb: schema: %w", err)
 	}
+	if err := migrateSchema(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("forgedb: migrate: %w", err)
+	}
 	return &DB{db: db}, nil
+}
+
+// migrateSchema adds columns that were introduced after the initial schema.
+// Each ALTER TABLE is idempotent: duplicate column errors are silently ignored.
+func migrateSchema(db *sql.DB) error {
+	migrations := []string{
+		`ALTER TABLE nodes ADD COLUMN session_token TEXT`,
+	}
+	for _, m := range migrations {
+		if _, err := db.Exec(m); err != nil {
+			// SQLite returns "duplicate column name" when the column already exists.
+			if !isDuplicateColumn(err) {
+				return fmt.Errorf("%s: %w", m, err)
+			}
+		}
+	}
+	return nil
+}
+
+func isDuplicateColumn(err error) bool {
+	return err != nil && (strings.Contains(err.Error(), "duplicate column name") ||
+		strings.Contains(err.Error(), "already exists"))
 }
 
 // Close closes the underlying database connection.
@@ -374,7 +401,21 @@ func (d *DB) RegisterPack(name string, content []byte) error {
 }
 
 // AssignPack assigns a registered pack to a node.
+// Returns an error if the pack or node does not exist in the database.
 func (d *DB) AssignPack(nodeID, packID, assignedBy string) error {
+	var exists int
+	if err := d.db.QueryRow(`SELECT COUNT(*) FROM policy_packs WHERE id=?`, packID).Scan(&exists); err != nil {
+		return err
+	}
+	if exists == 0 {
+		return fmt.Errorf("pack %q not found — register it first with: forge pack register %s --file <path>", packID, packID)
+	}
+	if err := d.db.QueryRow(`SELECT COUNT(*) FROM nodes WHERE id=?`, nodeID).Scan(&exists); err != nil {
+		return err
+	}
+	if exists == 0 {
+		return fmt.Errorf("node %q not found — it must be enrolled before a pack can be assigned", nodeID)
+	}
 	_, err := d.db.Exec(`
 		INSERT INTO pack_assignments(node_id, pack_id, assigned_at, assigned_by)
 		VALUES (?, ?, CURRENT_TIMESTAMP, ?)

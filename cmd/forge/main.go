@@ -846,6 +846,11 @@ Example — directory:
 					len(policies), len(renderResult.Pack.Spec.Rules))
 			}
 
+			if signingKeyPath == "" {
+				fmt.Fprintf(os.Stderr, "WARN  pack is unsigned — KLIQ managed mode requires a signature\n")
+				fmt.Fprintf(os.Stderr, "      Add: --signing-key /etc/kernloom/forge-signing.key\n")
+			}
+
 			if outFile != "" && outFile != "-" {
 				if err := os.WriteFile(outFile, out, 0o644); err != nil {
 					return fmt.Errorf("write %s: %w", outFile, err)
@@ -1488,34 +1493,48 @@ func packAssignCmd() *cobra.Command {
 // ── forge pack register ───────────────────────────────────────────────────────
 
 func packRegisterCmd() *cobra.Command {
-	var dbPath string
-	var packFile string
+	var dbPath, nameOverride string
 	cmd := &cobra.Command{
-		Use:   "register <name>",
-		Short: "Register a signed pack file in the Forge database",
+		Use:   "register <pack.yaml>",
+		Short: "Register a pack file in the Forge database (name read from YAML metadata)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if packFile == "" {
-				return fmt.Errorf("--file is required")
-			}
-			content, err := os.ReadFile(packFile)
+			content, err := os.ReadFile(args[0])
 			if err != nil {
 				return fmt.Errorf("read pack: %w", err)
+			}
+			// Derive name from YAML metadata unless overridden.
+			name := nameOverride
+			if name == "" {
+				var meta struct {
+					Metadata struct {
+						Name string `yaml:"name"`
+					} `yaml:"metadata"`
+				}
+				if err := yaml.Unmarshal(content, &meta); err == nil && meta.Metadata.Name != "" {
+					name = meta.Metadata.Name
+				}
+			}
+			if name == "" {
+				// Fall back to filename without extension.
+				base := filepath.Base(args[0])
+				name = strings.TrimSuffix(base, filepath.Ext(base))
 			}
 			db, err := forgedb.Open(dbPath)
 			if err != nil {
 				return err
 			}
 			defer db.Close()
-			if err := db.RegisterPack(args[0], content); err != nil {
+			if err := db.RegisterPack(name, content); err != nil {
 				return err
 			}
-			fmt.Fprintf(os.Stderr, "OK  pack %q registered (%d bytes)\n", args[0], len(content))
+			fmt.Fprintf(os.Stderr, "OK  pack %q registered (%d bytes)\n", name, len(content))
+			fmt.Fprintf(os.Stderr, "    Next: forge pack assign %s <node-id>\n", name)
 			return nil
 		},
 	}
 	cmd.Flags().StringVar(&dbPath, "db", "/var/lib/kernloom/forge.db", "path to forge database")
-	cmd.Flags().StringVarP(&packFile, "file", "f", "", "path to the signed pack YAML file")
+	cmd.Flags().StringVar(&nameOverride, "name", "", "override the pack name (default: read from metadata.name in the YAML)")
 	return cmd
 }
 

@@ -191,12 +191,16 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "session token generation failed")
 		return
 	}
-	_ = s.db.SetSessionToken(req.NodeID, sessionToken)
-
-	s.db.Audit(req.NodeID, "enroll", fmt.Sprintf("mode=%s version=%s ip=%s", req.Mode, req.KLIQVersion, remoteIP(r)))
-	s.log.Printf("ENROLL node=%s mode=%s ip=%s status=pending", req.NodeID, req.Mode, remoteIP(r))
+	if err := s.db.SetSessionToken(req.NodeID, sessionToken); err != nil {
+		s.log.Printf("enroll: set session token for %s: %v", req.NodeID, err)
+		writeError(w, http.StatusInternalServerError, "failed to persist session token")
+		return
+	}
 
 	node, _ := s.db.GetNode(req.NodeID)
+	s.db.Audit(req.NodeID, "enroll", fmt.Sprintf("mode=%s version=%s ip=%s status=%s", req.Mode, req.KLIQVersion, remoteIP(r), node.Status))
+	s.log.Printf("ENROLL node=%s mode=%s ip=%s status=%s", req.NodeID, req.Mode, remoteIP(r), node.Status)
+
 	writeJSON(w, http.StatusOK, NodeEnrollmentResponse{
 		NodeID:       req.NodeID,
 		Status:       string(node.Status),
