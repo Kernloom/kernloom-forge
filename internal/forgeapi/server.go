@@ -12,6 +12,7 @@ package forgeapi
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -23,6 +24,7 @@ import (
 
 	"github.com/kernloom/kernloom-forge/internal/forgedb"
 	"github.com/kernloom/kernloom-forge/internal/ratelimit"
+	"gopkg.in/yaml.v3"
 )
 
 // Server is the HTTP handler for the forge serve API.
@@ -53,6 +55,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/nodes/{id}/heartbeat", s.handleHeartbeat)
 	mux.HandleFunc("GET /api/v1/nodes/{id}/policy-pack", s.handleGetPack)
 	mux.HandleFunc("POST /api/v1/nodes/{id}/policy-pack/status", s.handlePackStatus)
+	// Runtime bundle endpoints (managed mode).
+	mux.HandleFunc("GET /api/v1/nodes/{id}/runtime-bundle", s.handleGetBundle)
+	mux.HandleFunc("POST /api/v1/nodes/{id}/runtime-bundle/status", s.handleBundleStatus)
+	mux.HandleFunc("POST /api/v1/nodes/{id}/baseline-proposals", s.handleBaselineProposal)
 
 	// Admin endpoints — require admin key or loopback source.
 	mux.HandleFunc("GET /api/v1/nodes", s.withAdmin(s.handleListNodes))
@@ -61,6 +67,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/packs", s.withAdmin(s.handleRegisterPack))
 	mux.HandleFunc("POST /api/v1/nodes/{id}/assign-pack", s.withAdmin(s.handleAssignPack))
 	mux.HandleFunc("GET /api/v1/tokens", s.withAdmin(s.handleListTokens))
+	mux.HandleFunc("POST /api/v1/bundles", s.withAdmin(s.handleRegisterBundle))
+	mux.HandleFunc("POST /api/v1/nodes/{id}/assign-bundle", s.withAdmin(s.handleAssignBundle))
 
 	return mux
 }
@@ -378,6 +386,141 @@ func (s *Server) handleListTokens(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, tokens)
 }
+
+// ── Runtime bundle handlers ───────────────────────────────────────────────────
+
+// handleGetBundle serves GET /api/v1/nodes/{id}/runtime-bundle.
+// Returns the raw signed YAML bundle assigned to this node.
+func (s *Server) handleGetBundle(w http.ResponseWriter, r *http.Request) {
+	nodeID := r.PathValue("id")
+	if !s.sessionAuth(r, nodeID) {
+		writeError(w, http.StatusUnauthorized, "invalid session token")
+		return
+	}
+	node, err := s.db.GetNode(nodeID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "node not found")
+		return
+	}
+	if node.Status == "revoked" {
+		writeError(w, http.StatusForbidden, "node is revoked")
+		return
+	}
+
+	content, generation, err := s.db.GetAssignedBundle(nodeID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	if content == nil {
+		writeError(w, http.StatusNotFound, "no runtime bundle assigned to this node")
+		return
+	}
+	w.Header().Set("Content-Type", "application/yaml")
+	w.Header().Set("X-Bundle-Generation", fmt.Sprintf("%d", generation))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(content)
+}
+
+// handleBundleStatus serves POST /api/v1/nodes/{id}/runtime-bundle/status.
+func (s *Server) handleBundleStatus(w http.ResponseWriter, r *http.Request) {
+	nodeID := r.PathValue("id")
+	if !s.sessionAuth(r, nodeID) {
+		writeError(w, http.StatusUnauthorized, "invalid session token")
+		return
+	}
+	var req struct {
+		Generation  int    `json:"bundle_generation"`
+		Applied     bool   `json:"applied"`
+		Drift       bool   `json:"drift_detected"`
+		ErrorDetail string `json:"error_detail,omitempty"`
+		StatusJSON  string `json:"status_json,omitempty"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if err := s.db.RecordRuntimeStatus(nodeID, req.Generation, req.Applied, req.Drift, req.StatusJSON, req.ErrorDetail); err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	s.log.Printf("BUNDLE-STATUS node=%s gen=%d applied=%v drift=%v", nodeID, req.Generation, req.Applied, req.Drift)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleBaselineProposal serves POST /api/v1/nodes/{id}/baseline-proposals.
+func (s *Server) handleBaselineProposal(w http.ResponseWriter, r *http.Request) {
+	nodeID := r.PathValue("id")
+	if !s.sessionAuth(r, nodeID) {
+		writeError(w, http.StatusUnauthorized, "invalid session token")
+		return
+	}
+	content, err := readAll(r)
+	if err != nil || len(content) == 0 {
+		writeError(w, http.StatusBadRequest, "empty proposal body")
+		return
+	}
+	hash := fmt.Sprintf("%x", hashBytes(content))[:16]
+	id, err := s.db.SaveBaselineProposal(nodeID, hash, content)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	s.db.Audit(nodeID, "baseline_proposal_received", hash)
+	s.log.Printf("BASELINE-PROPOSAL node=%s id=%s bytes=%d", nodeID, id, len(content))
+	writeJSON(w, http.StatusCreated, map[string]string{"id": id, "status": "pending"})
+}
+
+// handleRegisterBundle stores a signed bundle (admin). Body is raw YAML.
+func (s *Server) handleRegisterBundle(w http.ResponseWriter, r *http.Request) {
+	nodeID := r.URL.Query().Get("node_id")
+	if nodeID == "" {
+		writeError(w, http.StatusBadRequest, "?node_id= required")
+		return
+	}
+	content, _ := readAll(r)
+	if len(content) == 0 {
+		writeError(w, http.StatusBadRequest, "empty bundle body")
+		return
+	}
+	hash := fmt.Sprintf("%x", hashBytes(content))
+	// Extract generation from a minimal YAML parse.
+	generation := 1
+	var meta struct {
+		Metadata struct {
+			Generation int `yaml:"generation"`
+		} `yaml:"metadata"`
+	}
+	if err := yaml.Unmarshal(content, &meta); err == nil && meta.Metadata.Generation > 0 {
+		generation = meta.Metadata.Generation
+	}
+	id, err := s.db.SaveRuntimeBundle(nodeID, generation, content, hash, time.Now().UTC())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	s.log.Printf("BUNDLE-REGISTER node=%s id=%s gen=%d bytes=%d", nodeID, id, generation, len(content))
+	writeJSON(w, http.StatusCreated, map[string]string{"id": id, "node_id": nodeID})
+}
+
+// handleAssignBundle assigns a registered bundle to a node (admin).
+func (s *Server) handleAssignBundle(w http.ResponseWriter, r *http.Request) {
+	nodeID := r.PathValue("id")
+	bundleID := r.URL.Query().Get("bundle")
+	if bundleID == "" {
+		writeError(w, http.StatusBadRequest, "?bundle= required")
+		return
+	}
+	if err := s.db.AssignRuntimeBundle(nodeID, bundleID, "operator"); err != nil {
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+	s.db.Audit(nodeID, "bundle_assigned", bundleID)
+	s.log.Printf("BUNDLE-ASSIGN node=%s bundle=%s", nodeID, bundleID)
+	writeJSON(w, http.StatusOK, map[string]string{"node_id": nodeID, "bundle": bundleID})
+}
+
+func hashBytes(b []byte) [32]byte { return sha256.Sum256(b) }
 
 func readAll(r *http.Request) ([]byte, error) {
 	buf := make([]byte, 0, 4096)

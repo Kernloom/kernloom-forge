@@ -99,6 +99,42 @@ func applySchema(db *sql.DB) error {
 		action    TEXT NOT NULL,
 		detail    TEXT
 	);
+
+	CREATE TABLE IF NOT EXISTS runtime_bundles (
+		id           TEXT PRIMARY KEY,
+		node_id      TEXT NOT NULL,
+		generation   INTEGER NOT NULL,
+		content      BLOB NOT NULL,
+		content_hash TEXT NOT NULL,
+		issued_at    DATETIME NOT NULL,
+		created_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+	);
+
+	CREATE TABLE IF NOT EXISTS runtime_assignments (
+		node_id     TEXT PRIMARY KEY REFERENCES nodes(id),
+		bundle_id   TEXT NOT NULL REFERENCES runtime_bundles(id),
+		assigned_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		assigned_by TEXT NOT NULL DEFAULT 'operator'
+	);
+
+	CREATE TABLE IF NOT EXISTS runtime_status (
+		node_id        TEXT PRIMARY KEY REFERENCES nodes(id),
+		generation     INTEGER NOT NULL DEFAULT 0,
+		applied        INTEGER NOT NULL DEFAULT 0,
+		drift_detected INTEGER NOT NULL DEFAULT 0,
+		status_json    TEXT,
+		error_detail   TEXT,
+		reported_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+	);
+
+	CREATE TABLE IF NOT EXISTS baseline_proposals (
+		id            TEXT PRIMARY KEY,
+		node_id       TEXT NOT NULL REFERENCES nodes(id),
+		proposal_hash TEXT NOT NULL,
+		content       BLOB NOT NULL,
+		status        TEXT NOT NULL DEFAULT 'pending',
+		created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+	);
 	`)
 	return err
 }
@@ -363,4 +399,98 @@ func (d *DB) Audit(nodeID, action, detail string) {
 		INSERT INTO audit_log(node_id, action, detail)
 		VALUES (?, ?, ?)
 	`, nodeID, action, detail)
+}
+
+// ── Runtime bundles ───────────────────────────────────────────────────────────
+
+// SaveRuntimeBundle stores a signed bundle and returns its ID (content hash).
+func (d *DB) SaveRuntimeBundle(nodeID string, generation int, content []byte, contentHash string, issuedAt time.Time) (string, error) {
+	id := contentHash[:16] // use prefix as stable short ID
+	_, err := d.db.Exec(`
+		INSERT OR REPLACE INTO runtime_bundles(id, node_id, generation, content, content_hash, issued_at)
+		VALUES (?, ?, ?, ?, ?, ?)
+	`, id, nodeID, generation, content, contentHash, issuedAt.UTC())
+	return id, err
+}
+
+// AssignRuntimeBundle assigns a bundle to a node.
+func (d *DB) AssignRuntimeBundle(nodeID, bundleID, assignedBy string) error {
+	_, err := d.db.Exec(`
+		INSERT OR REPLACE INTO runtime_assignments(node_id, bundle_id, assigned_by)
+		VALUES (?, ?, ?)
+	`, nodeID, bundleID, assignedBy)
+	return err
+}
+
+// GetAssignedBundle returns the raw bundle content for the given node.
+// Returns nil content and no error if no bundle is assigned.
+func (d *DB) GetAssignedBundle(nodeID string) ([]byte, int, error) {
+	row := d.db.QueryRow(`
+		SELECT rb.content, rb.generation
+		FROM runtime_assignments ra
+		JOIN runtime_bundles rb ON ra.bundle_id = rb.id
+		WHERE ra.node_id = ?
+	`, nodeID)
+	var content []byte
+	var generation int
+	if err := row.Scan(&content, &generation); err != nil {
+		if err.Error() == "sql: no rows in result set" {
+			return nil, 0, nil
+		}
+		return nil, 0, err
+	}
+	return content, generation, nil
+}
+
+// RecordRuntimeStatus stores the latest lifecycle status report from a node.
+func (d *DB) RecordRuntimeStatus(nodeID string, generation int, applied, drift bool, statusJSON, errorDetail string) error {
+	appliedInt := 0
+	if applied {
+		appliedInt = 1
+	}
+	driftInt := 0
+	if drift {
+		driftInt = 1
+	}
+	_, err := d.db.Exec(`
+		INSERT OR REPLACE INTO runtime_status(node_id, generation, applied, drift_detected, status_json, error_detail, reported_at)
+		VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+	`, nodeID, generation, appliedInt, driftInt, statusJSON, errorDetail)
+	return err
+}
+
+// SaveBaselineProposal stores a baseline proposal from a node.
+func (d *DB) SaveBaselineProposal(nodeID, proposalHash string, content []byte) (string, error) {
+	id := fmt.Sprintf("%s-%d", nodeID, time.Now().UnixNano())
+	_, err := d.db.Exec(`
+		INSERT INTO baseline_proposals(id, node_id, proposal_hash, content)
+		VALUES (?, ?, ?, ?)
+	`, id, nodeID, proposalHash, content)
+	return id, err
+}
+
+// ListBaselineProposals returns pending proposals for a node.
+func (d *DB) ListBaselineProposals(nodeID string) ([]map[string]string, error) {
+	rows, err := d.db.Query(`
+		SELECT id, proposal_hash, status, created_at
+		FROM baseline_proposals
+		WHERE node_id = ?
+		ORDER BY created_at DESC
+		LIMIT 10
+	`, nodeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []map[string]string
+	for rows.Next() {
+		var id, hash, status, createdAt string
+		if err := rows.Scan(&id, &hash, &status, &createdAt); err != nil {
+			continue
+		}
+		out = append(out, map[string]string{
+			"id": id, "proposal_hash": hash, "status": status, "created_at": createdAt,
+		})
+	}
+	return out, rows.Err()
 }
