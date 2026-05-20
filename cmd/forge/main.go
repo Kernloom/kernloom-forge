@@ -65,7 +65,7 @@ func rootCmd() *cobra.Command {
 		Short: "Kernloom Forge — policy compiler and registry validator",
 	}
 	root.AddCommand(registryCmd())
-	root.AddCommand(adapterCmd())
+	root.AddCommand(nodeCmd())
 	root.AddCommand(policyCmd())
 	root.AddCommand(compileCmd())
 	root.AddCommand(packCmd())
@@ -290,13 +290,13 @@ func registryValidateCmd() *cobra.Command {
 	}
 }
 
-// ── forge adapter ─────────────────────────────────────────────────────────────
+// ── forge node ────────────────────────────────────────────────────────────────
 
-func adapterCmd() *cobra.Command {
+func nodeCmd() *cobra.Command {
 	var registryDir string
 	cmd := &cobra.Command{
-		Use:   "adapter",
-		Short: "Node definition (adapter) operations",
+		Use:   "node",
+		Short: "Node definition operations",
 	}
 	validateCmd := &cobra.Command{
 		Use:   "validate <node-definition.yaml>",
