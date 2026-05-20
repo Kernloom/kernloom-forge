@@ -29,11 +29,17 @@ func examplesDir(t *testing.T) string {
 	return filepath.Join(filepath.Dir(file), "..", "..", "examples")
 }
 
+func adaptersDir(t *testing.T) string {
+	t.Helper()
+	_, file, _, _ := runtime.Caller(0)
+	return filepath.Join(filepath.Dir(file), "..", "..", "registries", "adapters")
+}
+
 func TestL3L4XDPFilterDefinitionValid(t *testing.T) {
 	reg := loadTestRegistry(t)
-	path := filepath.Join(examplesDir(t), "nodes", "l3l4-xdp-filter.yaml")
+	path := filepath.Join(adaptersDir(t), "klshield.yaml")
 	if err := validator.ValidateAdapterFile(path, reg); err != nil {
-		t.Errorf("l3l4-xdp-filter node definition should be valid: %v", err)
+		t.Errorf("klshield adapter definition should be valid: %v", err)
 	}
 }
 

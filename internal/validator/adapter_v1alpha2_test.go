@@ -12,25 +12,25 @@ import (
 
 func TestL3L4XDPFilterNodeValid(t *testing.T) {
 	reg := loadTestRegistry(t)
-	path := filepath.Join(examplesDir(t), "nodes", "l3l4-xdp-filter.yaml")
+	path := filepath.Join(adaptersDir(t), "klshield.yaml")
 	if err := validator.ValidateAdapterFile(path, reg); err != nil {
-		t.Errorf("l3l4-xdp-filter node definition should be valid: %v", err)
+		t.Errorf("klshield adapter definition should be valid: %v", err)
 	}
 }
 
 func TestTCPProxyNodeValid(t *testing.T) {
 	reg := loadTestRegistry(t)
-	path := filepath.Join(examplesDir(t), "nodes", "tcp-proxy.yaml")
+	path := filepath.Join(adaptersDir(t), "tcp-proxy.yaml")
 	if err := validator.ValidateAdapterFile(path, reg); err != nil {
-		t.Errorf("tcp-proxy node definition should be valid: %v", err)
+		t.Errorf("tcp-proxy adapter definition should be valid: %v", err)
 	}
 }
 
 func TestLocalRiskEngineNodeValid(t *testing.T) {
 	reg := loadTestRegistry(t)
-	path := filepath.Join(examplesDir(t), "nodes", "local-risk-engine.yaml")
+	path := filepath.Join(adaptersDir(t), "kliq.yaml")
 	if err := validator.ValidateAdapterFile(path, reg); err != nil {
-		t.Errorf("local-risk-engine node definition should be valid: %v", err)
+		t.Errorf("kliq adapter definition should be valid: %v", err)
 	}
 }
 

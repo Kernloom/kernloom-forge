@@ -22,6 +22,7 @@ import (
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 
+	"github.com/kernloom/kernloom-forge/internal/adapterseed"
 	"github.com/kernloom/kernloom-forge/internal/assessment"
 	"github.com/kernloom/kernloom-forge/internal/compiler"
 	"github.com/kernloom/kernloom-forge/internal/forgeapi"
@@ -42,6 +43,27 @@ func main() {
 //  1. FORGE_REGISTRY_DIR env var (highest priority)
 //  2. The path as given (works when running from repo root)
 //  3. <binary-dir>/registries/core (works for installed binaries)
+//
+// resolveAdapterDefsDir resolves the adapter definitions directory with fallbacks:
+//  1. FORGE_ADAPTERS_DIR env var
+//  2. The path as given
+//  3. <binary-dir>/registries/adapters
+func resolveAdapterDefsDir(flagVal string) string {
+	if env := os.Getenv("FORGE_ADAPTERS_DIR"); env != "" {
+		return env
+	}
+	if _, err := os.Stat(flagVal); err == nil {
+		return flagVal
+	}
+	if exe, err := os.Executable(); err == nil {
+		candidate := filepath.Join(filepath.Dir(exe), "registries", "adapters")
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+	return flagVal
+}
+
 func resolveRegistryDir(flagVal string) string {
 	if env := os.Getenv("FORGE_REGISTRY_DIR"); env != "" {
 		return env
@@ -75,6 +97,7 @@ func rootCmd() *cobra.Command {
 	root.AddCommand(nodesCmd())
 	root.AddCommand(assessCmd())
 	root.AddCommand(bundleCmd())
+	root.AddCommand(adapterDefCmd())
 	return root
 }
 
@@ -620,7 +643,7 @@ Example:
 		},
 	}
 	cmd.Flags().StringVar(&registryDir, "registry", "registries/core", "path to core registry directory")
-	cmd.Flags().StringVar(&nodesDir, "nodes", "examples/nodes", "path to node definitions directory")
+	cmd.Flags().StringVar(&nodesDir, "nodes", "registries/adapters", "path to node definitions directory")
 	cmd.Flags().StringVarP(&outFile, "out", "o", "-", "output file (- for stdout)")
 	cmd.Flags().StringVar(&signingKeyPath, "signing-key", "", "path to Ed25519 private key for signing")
 	cmd.Flags().StringVar(&forgeURL, "forge-url", "", "Forge endpoint to include in pack exports")
@@ -648,7 +671,7 @@ KLIQ maps these to adapter calls via its internal normalisation table.
 Example:
   forge pack examples/policies/mitigate-connection-spike.yaml \
     --registry registries/core \
-    --nodes examples/nodes \
+    --nodes registries/adapters \
     --out examples/packs/mitigate-connection-spike.pack.yaml`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -724,7 +747,7 @@ Example:
 		},
 	}
 	cmd.Flags().StringVar(&registryDir, "registry", "registries/core", "path to core registry directory")
-	cmd.Flags().StringVar(&nodesDir, "nodes", "examples/nodes", "path to node definitions directory")
+	cmd.Flags().StringVar(&nodesDir, "nodes", "registries/adapters", "path to node definitions directory")
 	cmd.Flags().StringVar(&forgeURL, "forge-url", "", "Forge endpoint to include in pack exports")
 	cmd.Flags().StringVarP(&outFile, "out", "o", "-", "output file (- for stdout)")
 	cmd.Flags().StringVar(&signingKeyPath, "signing-key", "", "path to Ed25519 private key for signing the pack")
@@ -930,7 +953,7 @@ fallbacks, and which required capabilities (if any) could not be satisfied.
 Example:
   forge compile examples/policies/mitigate-connection-spike.yaml \
     --registry registries/core \
-    --nodes examples/nodes`,
+    --nodes registries/adapters`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			reg, err := registry.LoadDir(resolveRegistryDir(registryDir))
@@ -972,7 +995,7 @@ Example:
 		},
 	}
 	cmd.Flags().StringVar(&registryDir, "registry", "registries/core", "path to core registry directory")
-	cmd.Flags().StringVar(&nodesDir, "nodes", "examples/nodes", "path to node definitions directory")
+	cmd.Flags().StringVar(&nodesDir, "nodes", "registries/adapters", "path to node definitions directory")
 	return cmd
 }
 
@@ -984,6 +1007,7 @@ func serveCmd() *cobra.Command {
 	var adminKey string
 	var tlsCert string
 	var tlsKey string
+	var adapterDefsDir string
 
 	cmd := &cobra.Command{
 		Use:   "serve",
@@ -1022,6 +1046,19 @@ Example (HTTPS):
 			defer db.Close()
 			logger.Printf("database: %s", dbPath)
 
+			// Auto-register adapter definitions from registries/adapters/ on startup.
+			// Idempotent: unchanged definitions are skipped, updated ones are upserted.
+			dir := resolveAdapterDefsDir(adapterDefsDir)
+			if n, errs := adapterseed.SeedFromDir(db, dir, logger); len(errs) > 0 {
+				for _, e := range errs {
+					logger.Printf("WARNING: adapter definition seed error: %v", e)
+				}
+			} else if n > 0 {
+				logger.Printf("adapter definitions: %d registered/updated from %s", n, dir)
+			} else {
+				logger.Printf("adapter definitions: up to date (%s)", dir)
+			}
+
 			if adminKey == "" {
 				logger.Printf("WARNING: --admin-key not set — admin endpoints restricted to loopback")
 			}
@@ -1042,6 +1079,7 @@ Example (HTTPS):
 	cmd.Flags().StringVar(&adminKey, "admin-key", "", "admin API key (Authorization: Bearer); empty = loopback-only")
 	cmd.Flags().StringVar(&tlsCert, "tls-cert", "", "path to TLS certificate file (enables HTTPS)")
 	cmd.Flags().StringVar(&tlsKey, "tls-key", "", "path to TLS private key file (enables HTTPS)")
+	cmd.Flags().StringVar(&adapterDefsDir, "adapters", "registries/adapters", "path to adapter definitions directory (auto-registered on startup)")
 	return cmd
 }
 
@@ -1911,4 +1949,167 @@ func bundleListCmd() *cobra.Command {
 func hashContent(b []byte) string {
 	h := sha256.Sum256(b)
 	return hex.EncodeToString(h[:])
+}
+
+// ── forge adapter (definitions) ───────────────────────────────────────────────
+
+func adapterDefCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "adapter",
+		Short: "Adapter definition operations (capability declarations per adapter type)",
+		Long: `Manage canonical adapter definitions stored in the Forge database.
+
+Adapter definitions (registries/adapters/*.yaml) declare what each adapter
+type can do — its capabilities, roles, and supported enforcement granularities.
+Forge uses them to validate pack compilation and to match adapter types during
+node enrollment.
+
+Definitions are auto-registered from registries/adapters/ when forge serve starts.
+Use these commands for manual inspection and assignment.`,
+	}
+	cmd.AddCommand(adapterListCmd())
+	cmd.AddCommand(adapterShowCmd())
+	cmd.AddCommand(adapterAssignCmd())
+	cmd.AddCommand(adapterEnableAutoCmd())
+	return cmd
+}
+
+func adapterListCmd() *cobra.Command {
+	var dbPath string
+	return &cobra.Command{
+		Use:   "list",
+		Short: "List registered adapter definitions",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			db, err := forgedb.Open(dbPath)
+			if err != nil {
+				return err
+			}
+			defer db.Close()
+			defs, err := db.ListAdapterDefinitions()
+			if err != nil {
+				return err
+			}
+			if len(defs) == 0 {
+				fmt.Println("no adapter definitions registered (start forge serve to auto-register)")
+				return nil
+			}
+			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+			fmt.Fprintln(w, "ID\tNAME\tVERSION\tHASH\tUPDATED")
+			for _, d := range defs {
+				hash := d.ContentHash
+				if len(hash) > 12 {
+					hash = hash[:12]
+				}
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", d.ID, d.Name, d.Version, hash, d.UpdatedAt)
+			}
+			return w.Flush()
+		},
+	}
+}
+
+func adapterShowCmd() *cobra.Command {
+	var dbPath string
+	cmd := &cobra.Command{
+		Use:   "show <definition-id>",
+		Short: "Print the YAML of a registered adapter definition",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			db, err := forgedb.Open(dbPath)
+			if err != nil {
+				return err
+			}
+			defer db.Close()
+			content, err := db.GetAdapterDefinition(args[0])
+			if err != nil {
+				return err
+			}
+			if content == nil {
+				return fmt.Errorf("adapter definition %q not found", args[0])
+			}
+			_, err = os.Stdout.Write(content)
+			return err
+		},
+	}
+	cmd.Flags().StringVar(&dbPath, "db", "/var/lib/kernloom/forge.db", "path to forge database")
+	return cmd
+}
+
+func adapterAssignCmd() *cobra.Command {
+	var dbPath, definition string
+	cmd := &cobra.Command{
+		Use:   "assign <node-id>",
+		Short: "Manually assign an adapter definition to a node",
+		Long: `Assign a registered adapter definition to an enrolled node.
+
+The definition tells Forge which capabilities this node has — it is used when
+compiling policies for the node. A node without an assigned definition will
+receive packs compiled without node-specific capability filtering.
+
+Example:
+  forge adapter assign edge-01 --definition klshield`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if definition == "" {
+				return fmt.Errorf("--definition is required")
+			}
+			db, err := forgedb.Open(dbPath)
+			if err != nil {
+				return err
+			}
+			defer db.Close()
+			// Verify definition exists.
+			content, err := db.GetAdapterDefinition(definition)
+			if err != nil {
+				return err
+			}
+			if content == nil {
+				return fmt.Errorf("adapter definition %q not found — run 'forge adapter list' to see available definitions", definition)
+			}
+			if err := db.AssignAdapterDefinition(args[0], definition, "operator"); err != nil {
+				return err
+			}
+			fmt.Fprintf(os.Stderr, "OK  node %s → adapter definition %s\n", args[0], definition)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&dbPath, "db", "/var/lib/kernloom/forge.db", "path to forge database")
+	cmd.Flags().StringVar(&definition, "definition", "", "adapter definition ID (e.g. klshield, kliq, tcp-proxy)")
+	_ = cmd.MarkFlagRequired("definition")
+	return cmd
+}
+
+func adapterEnableAutoCmd() *cobra.Command {
+	var dbPath string
+	var disable bool
+	cmd := &cobra.Command{
+		Use:   "enable-auto <node-id>",
+		Short: "Allow automatic adapter definition assignment for a node during enrollment",
+		Long: `Mark a node as eligible for automatic adapter definition assignment.
+
+When enabled, Forge will match the node's enrollment inventory against known
+adapter definitions (via plugin_match) and assign the best match automatically.
+Default is disabled — manual assignment with 'forge adapter assign' is required.
+
+To revert to manual-only: use --disable.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			db, err := forgedb.Open(dbPath)
+			if err != nil {
+				return err
+			}
+			defer db.Close()
+			if err := db.SetNodeAutoEligible(args[0], !disable); err != nil {
+				return err
+			}
+			if disable {
+				fmt.Fprintf(os.Stderr, "OK  node %s: auto-assignment disabled (manual only)\n", args[0])
+			} else {
+				fmt.Fprintf(os.Stderr, "OK  node %s: auto-assignment enabled\n", args[0])
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&dbPath, "db", "/var/lib/kernloom/forge.db", "path to forge database")
+	cmd.Flags().BoolVar(&disable, "disable", false, "disable auto-assignment (revert to manual)")
+	return cmd
 }

@@ -180,6 +180,8 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Inventory != nil {
 		_ = s.db.SaveNodeInventory(req.NodeID, req.Inventory)
+		// Auto-assign adapter definition from inventory when node is eligible.
+		s.tryAutoAssignDefinition(req.NodeID, req.Inventory)
 	}
 	if req.ConfigReport != nil {
 		_ = s.db.SaveNodeConfigAsset(req.NodeID, req.ConfigReport)
@@ -532,6 +534,68 @@ func (s *Server) handleAssignBundle(w http.ResponseWriter, r *http.Request) {
 }
 
 func hashBytes(b []byte) [32]byte { return sha256.Sum256(b) }
+
+// tryAutoAssignDefinition attempts to match the node's inventory against a
+// registered adapter definition and assigns it when the node is auto-eligible
+// and no definition is already assigned. Silent no-op on any error.
+func (s *Server) tryAutoAssignDefinition(nodeID string, inventory any) {
+	if !s.db.IsNodeAutoEligible(nodeID) {
+		return
+	}
+	// Already assigned — don't override.
+	if def, _, _ := s.db.GetNodeDefinition(nodeID); def != nil {
+		return
+	}
+
+	// Extract plugin IDs from inventory. We marshal/unmarshal via JSON to avoid
+	// a hard import on componentinventory — the inventory arrives as any.
+	pluginIDs := extractPluginIDs(inventory)
+	for _, pluginID := range pluginIDs {
+		defID, err := s.db.FindDefinitionByPlugin(pluginID)
+		if err != nil || defID == "" {
+			continue
+		}
+		if err := s.db.AssignAdapterDefinition(nodeID, defID, "auto"); err == nil {
+			s.log.Printf("AUTO-ASSIGN node=%s definition=%s (matched plugin=%s)", nodeID, defID, pluginID)
+		}
+		return
+	}
+}
+
+// extractPluginIDs pulls plugin ID strings from a raw inventory value.
+// Supports the ComponentRuntimeInventory shape sent by KLIQ at enrollment.
+func extractPluginIDs(inventory any) []string {
+	// inventory arrives as map[string]any after JSON decode.
+	m, ok := inventory.(map[string]any)
+	if !ok {
+		// Try JSON round-trip.
+		b, err := json.Marshal(inventory)
+		if err != nil {
+			return nil
+		}
+		if err := json.Unmarshal(b, &m); err != nil {
+			return nil
+		}
+	}
+	// controlled_by.plugin_adapter (single adapter on the inventory root)
+	var ids []string
+	if cb, ok := m["controlled_by"].(map[string]any); ok {
+		if p, ok := cb["plugin_adapter"].(string); ok && p != "" {
+			ids = append(ids, p)
+		}
+	}
+	// adapters[] from config_report shape
+	if adapters, ok := m["adapters"].([]any); ok {
+		for _, a := range adapters {
+			if am, ok := a.(map[string]any); ok {
+				if plugin, ok := am["plugin"].(string); ok && plugin != "" {
+					ids = append(ids, plugin)
+				}
+			}
+		}
+	}
+	return ids
+}
 
 func readAll(r *http.Request) ([]byte, error) {
 	buf := make([]byte, 0, 4096)

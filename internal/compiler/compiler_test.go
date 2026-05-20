@@ -34,7 +34,7 @@ func loadReg(t *testing.T) *registry.Registry {
 
 func loadExampleNodes(t *testing.T, reg *registry.Registry) []validator.NodeDefinition {
 	t.Helper()
-	nodes, err := validator.LoadNodeDefinitionsFromDir(filepath.Join(repoRoot(t), "examples", "nodes"), reg)
+	nodes, err := validator.LoadNodeDefinitionsFromDir(filepath.Join(repoRoot(t), "registries", "adapters"), reg)
 	if err != nil {
 		t.Fatalf("load example nodes: %v", err)
 	}
@@ -110,23 +110,23 @@ func TestCompileMitigateConnectionSpike(t *testing.T) {
 	}
 	enforcerOK := false
 	for _, e := range result.SelectedPlan.Enforcers {
-		if e.NodeID == "l3l4-xdp-filter-edge-01" {
+		if e.NodeID == "klshield" {
 			enforcerOK = true
 		}
 	}
 	if !enforcerOK {
-		t.Errorf("l3l4-xdp-filter-edge-01 not selected as enforcer; got: %v", result.SelectedPlan.Enforcers)
+		t.Errorf("klshield not selected as enforcer; got: %v", result.SelectedPlan.Enforcers)
 	}
 
 	// tcp-proxy should be a fallback (can do observe.network.connection but not rate_limit).
 	tcpProxyFallback := false
 	for _, f := range result.Fallbacks {
-		if f.NodeID == "tcp-proxy-edge-01" {
+		if f.NodeID == "tcp-proxy" {
 			tcpProxyFallback = true
 		}
 	}
 	if !tcpProxyFallback {
-		t.Errorf("expected tcp-proxy-edge-01 as fallback; fallbacks: %v", result.Fallbacks)
+		t.Errorf("expected tcp-proxy as fallback; fallbacks: %v", result.Fallbacks)
 	}
 }
 

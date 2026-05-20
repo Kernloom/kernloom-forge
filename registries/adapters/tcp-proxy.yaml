@@ -1,0 +1,83 @@
+kind: AdapterDefinition
+apiVersion: forge.kernloom.io/v1alpha2
+
+# tcp-proxy — canonical capability declaration for a generic L4 TCP proxy adapter.
+# Examples: HAProxy (TCP mode), Envoy (TCP proxy), custom Go/Rust proxies.
+# Operates at connection level — no HTTP semantics, optional TLS SNI pre-read.
+
+metadata:
+  id: tcp-proxy
+  name: TCP Proxy
+  version: 1.0.0
+  description: >
+    Connection-level reverse proxy enforcing at the TCP listener.
+    Supports source-IP and CIDR deny, connection limits, bandwidth limits.
+    No L7 context. Optional TLS SNI pre-read.
+
+plugin_match:
+  - builtin-tcp-proxy
+  - tcp-proxy
+  - haproxy
+  - envoy-tcp
+
+adapter:
+  id: tcp-proxy
+  roles:
+    - pep
+    - sensor
+  profiles:
+    - network.transport_proxy
+
+placement:
+  execution_model: reverse_proxy
+  enforcement_point: tcp_listener
+  layer: l4
+
+implementation:
+  runtime_mode: stream_proxy
+
+capabilities:
+  - id: observe.network.connection
+    scopes: [listener_id, src_ip, dst_port, protocol]
+    produces_signals:
+      - network.entity.src_ip
+      - network.entity.dst_port
+      - network.metric.connections_per_second
+
+  - id: enforce.access.deny
+    granularity: [src_ip, src_cidr, listener_id, dst_port]
+    supports_ttl: false
+    supports_dry_run: true
+
+  - id: enforce.traffic.connection_limit
+    granularity: [src_ip, listener_id]
+    supports_ttl: false
+    supports_dry_run: true
+
+  - id: enforce.traffic.bandwidth_limit
+    granularity: [connection_id, listener_id]
+    supports_ttl: false
+    supports_dry_run: false
+
+optional_capabilities:
+  - id: observe.tls.client_hello
+    scopes: [connection_id]
+    produces_signals: [tls.sni, tls.alpn]
+
+constraints:
+  semantic_depth: l4_connection
+  visibility:
+    source_ip: {available: true, integrity: direct_or_proxy_protocol}
+    app: {route: unavailable, method: unavailable, headers: unavailable}
+  enforcement:
+    inline: true
+    fail_mode: fail_open
+    supports_dry_run: true
+    update_latency: local_slow
+
+selection_traits:
+  enforcement_position: mid
+  runtime_cost: low
+  semantic_precision: medium
+  source_attribution: conditional
+  convergence_speed: fast

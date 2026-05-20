@@ -162,6 +162,30 @@ func applySchema(db *sql.DB) error {
 		status        TEXT NOT NULL DEFAULT 'pending',
 		created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 	);
+
+	-- adapter_definitions stores the canonical capability declarations for each
+	-- known adapter type (klshield, kliq, tcp-proxy, nginx, …).
+	-- Populated automatically from registries/adapters/ on forge serve startup.
+	CREATE TABLE IF NOT EXISTS adapter_definitions (
+		id           TEXT PRIMARY KEY,   -- e.g. "klshield", "nginx"
+		name         TEXT NOT NULL,
+		version      TEXT NOT NULL DEFAULT '1.0.0',
+		content      BLOB NOT NULL,      -- raw YAML of the AdapterDefinition
+		content_hash TEXT NOT NULL,
+		plugin_match TEXT NOT NULL DEFAULT '[]', -- JSON array of plugin IDs for auto-match
+		registered_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		updated_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+	);
+
+	-- node_adapter_assignments maps enrolled nodes to their adapter definition.
+	-- assigned_by = 'operator' (manual) or 'auto' (matched from inventory).
+	CREATE TABLE IF NOT EXISTS node_adapter_assignments (
+		node_id       TEXT PRIMARY KEY REFERENCES nodes(id),
+		definition_id TEXT NOT NULL REFERENCES adapter_definitions(id),
+		assigned_by   TEXT NOT NULL DEFAULT 'operator',
+		auto_eligible INTEGER NOT NULL DEFAULT 0, -- 1 = node allows auto-assignment
+		assigned_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+	);
 	`)
 	return err
 }
@@ -744,4 +768,148 @@ func (d *DB) ListBaselineProposals(nodeID string) ([]map[string]string, error) {
 		})
 	}
 	return out, rows.Err()
+}
+
+// ── Adapter definitions ───────────────────────────────────────────────────────
+
+// AdapterDefinition is a stored capability declaration for one adapter type.
+type AdapterDefinition struct {
+	ID           string
+	Name         string
+	Version      string
+	ContentHash  string
+	PluginMatch  string // JSON array of plugin IDs
+	RegisteredAt string
+	UpdatedAt    string
+}
+
+// UpsertAdapterDefinition inserts or updates an adapter definition.
+// Idempotent: if content_hash matches the stored one, no update is performed.
+// Returns true when the record was inserted or updated (i.e. content changed).
+func (d *DB) UpsertAdapterDefinition(id, name, version string, content []byte, contentHash, pluginMatchJSON string) (bool, error) {
+	// Check if already stored with same hash → no-op.
+	var existingHash string
+	err := d.db.QueryRow(`SELECT content_hash FROM adapter_definitions WHERE id = ?`, id).Scan(&existingHash)
+	if err == nil && existingHash == contentHash {
+		return false, nil // unchanged
+	}
+
+	_, err = d.db.Exec(`
+		INSERT INTO adapter_definitions(id, name, version, content, content_hash, plugin_match, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(id) DO UPDATE SET
+			name         = excluded.name,
+			version      = excluded.version,
+			content      = excluded.content,
+			content_hash = excluded.content_hash,
+			plugin_match = excluded.plugin_match,
+			updated_at   = CURRENT_TIMESTAMP
+	`, id, name, version, content, contentHash, pluginMatchJSON)
+	return err == nil, err
+}
+
+// GetAdapterDefinition returns the raw YAML content of a definition by ID.
+func (d *DB) GetAdapterDefinition(id string) ([]byte, error) {
+	var content []byte
+	err := d.db.QueryRow(`SELECT content FROM adapter_definitions WHERE id = ?`, id).Scan(&content)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return content, err
+}
+
+// ListAdapterDefinitions returns summary info for all registered definitions.
+func (d *DB) ListAdapterDefinitions() ([]AdapterDefinition, error) {
+	rows, err := d.db.Query(`
+		SELECT id, name, version, content_hash, plugin_match, registered_at, updated_at
+		FROM adapter_definitions ORDER BY id
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []AdapterDefinition
+	for rows.Next() {
+		var d AdapterDefinition
+		if err := rows.Scan(&d.ID, &d.Name, &d.Version, &d.ContentHash, &d.PluginMatch, &d.RegisteredAt, &d.UpdatedAt); err != nil {
+			continue
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+// FindDefinitionByPlugin returns the definition ID whose plugin_match JSON array
+// contains the given pluginID. Returns "" when no match is found.
+func (d *DB) FindDefinitionByPlugin(pluginID string) (string, error) {
+	// Simple LIKE search — plugin_match is a JSON array like ["builtin-klshield","klshield"].
+	// For correctness we check for the quoted value inside the array.
+	var defID string
+	err := d.db.QueryRow(`
+		SELECT id FROM adapter_definitions
+		WHERE plugin_match LIKE ?
+		LIMIT 1
+	`, `%"`+pluginID+`"%`).Scan(&defID)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return defID, err
+}
+
+// AssignAdapterDefinition assigns a definition to a node.
+// assignedBy should be "operator" (manual) or "auto" (auto-matched).
+func (d *DB) AssignAdapterDefinition(nodeID, definitionID, assignedBy string) error {
+	_, err := d.db.Exec(`
+		INSERT INTO node_adapter_assignments(node_id, definition_id, assigned_by)
+		VALUES (?, ?, ?)
+		ON CONFLICT(node_id) DO UPDATE SET
+			definition_id = excluded.definition_id,
+			assigned_by   = excluded.assigned_by,
+			assigned_at   = CURRENT_TIMESTAMP
+	`, nodeID, definitionID, assignedBy)
+	return err
+}
+
+// SetNodeAutoEligible marks whether a node allows automatic definition assignment.
+func (d *DB) SetNodeAutoEligible(nodeID string, eligible bool) error {
+	v := 0
+	if eligible {
+		v = 1
+	}
+	_, err := d.db.Exec(`
+		INSERT INTO node_adapter_assignments(node_id, definition_id, auto_eligible)
+		VALUES (?, '', ?)
+		ON CONFLICT(node_id) DO UPDATE SET auto_eligible = excluded.auto_eligible
+	`, nodeID, v)
+	return err
+}
+
+// GetNodeDefinition returns the definition assigned to a node, or nil if none.
+func (d *DB) GetNodeDefinition(nodeID string) (*AdapterDefinition, []byte, error) {
+	var def AdapterDefinition
+	var content []byte
+	err := d.db.QueryRow(`
+		SELECT ad.id, ad.name, ad.version, ad.content_hash, ad.plugin_match,
+		       ad.registered_at, ad.updated_at, ad.content
+		FROM node_adapter_assignments na
+		JOIN adapter_definitions ad ON na.definition_id = ad.id
+		WHERE na.node_id = ?
+	`, nodeID).Scan(&def.ID, &def.Name, &def.Version, &def.ContentHash, &def.PluginMatch,
+		&def.RegisteredAt, &def.UpdatedAt, &content)
+	if err == sql.ErrNoRows {
+		return nil, nil, nil
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	return &def, content, nil
+}
+
+// IsNodeAutoEligible returns true when the node has opted into auto-assignment.
+func (d *DB) IsNodeAutoEligible(nodeID string) bool {
+	var v int
+	err := d.db.QueryRow(`
+		SELECT auto_eligible FROM node_adapter_assignments WHERE node_id = ?
+	`, nodeID).Scan(&v)
+	return err == nil && v == 1
 }
