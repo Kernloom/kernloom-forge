@@ -6,7 +6,9 @@ package main
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"net/http"
@@ -70,6 +72,7 @@ func rootCmd() *cobra.Command {
 	root.AddCommand(tokenCmd())
 	root.AddCommand(nodesCmd())
 	root.AddCommand(assessCmd())
+	root.AddCommand(bundleCmd())
 	return root
 }
 
@@ -1338,4 +1341,347 @@ func packRegisterCmd() *cobra.Command {
 	cmd.Flags().StringVar(&dbPath, "db", "/var/lib/kernloom/forge.db", "path to forge database")
 	cmd.Flags().StringVarP(&packFile, "file", "f", "", "path to the signed pack YAML file")
 	return cmd
+}
+
+// ── forge bundle ──────────────────────────────────────────────────────────────
+
+func bundleCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "bundle",
+		Short: "RuntimeBundle operations (managed-mode lifecycle config)",
+		Long: `RuntimeBundles are the managed-mode lifecycle envelope distributed by Forge.
+
+A RuntimeBundle is different from a LocalPolicyPack:
+
+  LocalPolicyPack  — WHAT effects are authorised (enforcement policy)
+  RuntimeBundle    — HOW KLIQ behaves (bootstrap lifecycle, graph learning,
+                     enforcement bounds, failover, managed exemptions)
+
+Typical workflow:
+
+  forge bundle create --node-id my-node --out bundle.yaml   # scaffold
+  # edit bundle.yaml to your needs
+  forge bundle register bundle.yaml                         # store in DB
+  forge bundle assign my-node --bundle <id>                 # deliver to node
+  forge bundle list my-node                                 # check status`,
+	}
+	cmd.AddCommand(bundleCreateCmd())
+	cmd.AddCommand(bundleRegisterCmd())
+	cmd.AddCommand(bundleAssignCmd())
+	cmd.AddCommand(bundleListCmd())
+	return cmd
+}
+
+// forge bundle create — scaffold a RuntimeBundle YAML from flags.
+func bundleCreateCmd() *cobra.Command {
+	var (
+		nodeID         string
+		featureProfile string
+		window         string
+		out            string
+		generation     int
+	)
+	cmd := &cobra.Command{
+		Use:   "create",
+		Short: "Scaffold a RuntimeBundle YAML from flags",
+		Long: `Generates a RuntimeBundle YAML with safe production defaults.
+Edit the output file before registering it — in particular review:
+  spec.bootstrap_autotune.floors   — minimum trigger thresholds
+  spec.graph_lifecycle.learning    — readiness conditions for freeze
+  spec.enforcement_bounds          — max enforcement during each phase`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if nodeID == "" {
+				return fmt.Errorf("--node-id is required")
+			}
+			if generation < 1 {
+				generation = 1
+			}
+			if window == "" {
+				window = "336h" // 14 days
+			}
+			if featureProfile == "" {
+				featureProfile = "graph-enforce"
+			}
+
+			issuedAt := time.Now().UTC().Format(time.RFC3339)
+			expiresAt := time.Now().UTC().Add(30 * 24 * time.Hour).Format(time.RFC3339)
+
+			b := map[string]any{
+				"apiVersion": "kernloom.io/managed/v1alpha1",
+				"kind":       "RuntimeBundle",
+				"metadata": map[string]any{
+					"node_id":    nodeID,
+					"generation": generation,
+					"issued_at":  issuedAt,
+					"expires_at": expiresAt,
+				},
+				"spec": map[string]any{
+					"feature_profile": featureProfile,
+					"bootstrap_autotune": map[string]any{
+						"enabled":                      true,
+						"window":                       window,
+						"require_clean_runtime":        true,
+						"count_only_clean_seconds":     true,
+						"allow_block_during_bootstrap": false,
+						"min_windows_before_downscale": 3,
+						"min_sources_before_downscale": 5,
+						"floors": map[string]any{
+							"pps": 100.0, "syn": 50.0, "scan": 20.0, "bps": 0.0,
+						},
+						"phases": []map[string]any{
+							{"name": "bootstrap-1", "until": "48h", "interval": "1h", "max_up": 0.10, "max_down": 0.02, "alpha": 0.10},
+							{"name": "bootstrap-2", "until": "120h", "interval": "6h", "max_up": 0.07, "max_down": 0.03, "alpha": 0.15},
+							{"name": "bootstrap-3", "until": window, "interval": "24h", "max_up": 0.05, "max_down": 0.05, "alpha": 0.20},
+						},
+						"steady": map[string]any{
+							"interval": "84h", "max_up": 0.05, "max_down": 0.05, "alpha": 0.20,
+						},
+					},
+					"source_baseline": map[string]any{
+						"enabled": true, "alpha_bootstrap": 0.10, "alpha_stable": 0.02,
+						"min_observations": 20, "max_sources": 10000,
+						"min_confidence": 0.60, "peak_multiplier": 2.5,
+					},
+					"graph_lifecycle": map[string]any{
+						"enabled": true,
+						"mode":    "managed",
+						"learning": map[string]any{
+							"duration":                    window,
+							"min_clean_learning":          "240h",
+							"min_learned_edges":           5,
+							"min_baseline_coverage":       0.70,
+							"require_autotune_phase":      "steady",
+							"require_no_block_events_for": "24h",
+						},
+						"freeze": map[string]any{
+							"auto_freeze": true, "approval": "forge-auto",
+							"proposal_upload": true, "include_edge_baselines": true,
+						},
+						"rollout": map[string]any{
+							"after_freeze_phase":   "frozen_observe",
+							"observe_after_freeze": "168h",
+							"final_phase":          "frozen_enforce",
+						},
+					},
+					"edge_baseline": map[string]any{
+						"enabled": true, "min_observations": 30,
+						"alpha_bootstrap": 0.10, "alpha_stable": 0.02,
+						"deviation_threshold": 5.0, "peak_tolerance": 2.0,
+					},
+					"enforcement_bounds": map[string]any{
+						"max_action_during_bootstrap":      "observe",
+						"max_action_during_frozen_observe": "observe",
+						"max_action_during_frozen_enforce": "rate_limit",
+						"allow_block":                      false,
+					},
+					"failover": map[string]any{
+						"behavior":                              "fail_static",
+						"allow_learning_while_offline":          true,
+						"allow_local_freeze_while_offline":      false,
+						"allow_enforce_promotion_while_offline": false,
+					},
+				},
+				"signature": map[string]any{
+					"algorithm": "ed25519",
+					"value":     "UNSIGNED — sign with: forge keygen + sign tooling",
+				},
+			}
+
+			raw, err := yaml.Marshal(b)
+			if err != nil {
+				return fmt.Errorf("marshal bundle: %w", err)
+			}
+
+			if out == "" || out == "-" {
+				_, err = os.Stdout.Write(raw)
+				return err
+			}
+			if err := os.WriteFile(out, raw, 0o644); err != nil {
+				return err
+			}
+			fmt.Fprintf(os.Stderr, "OK  bundle scaffold written to %s\n", out)
+			fmt.Fprintf(os.Stderr, "    node_id=%s generation=%d window=%s\n", nodeID, generation, window)
+			fmt.Fprintf(os.Stderr, "    Next: edit %s, then: forge bundle register %s\n", out, out)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&nodeID, "node-id", "", "target node ID (required)")
+	cmd.Flags().StringVar(&featureProfile, "feature-profile", "graph-enforce", "feature profile: dos-light | iq-learning | graph-learning | graph-enforce")
+	cmd.Flags().StringVar(&window, "window", "336h", "bootstrap window duration (e.g. 336h = 14 days)")
+	cmd.Flags().IntVar(&generation, "generation", 1, "bundle generation number (increment on each update)")
+	cmd.Flags().StringVarP(&out, "out", "o", "", "output file path (default: stdout)")
+	_ = cmd.MarkFlagRequired("node-id")
+	return cmd
+}
+
+// forge bundle register — store a bundle YAML in the Forge database.
+func bundleRegisterCmd() *cobra.Command {
+	var dbPath string
+	cmd := &cobra.Command{
+		Use:   "register <bundle.yaml>",
+		Short: "Register a RuntimeBundle file in the Forge database",
+		Long: `Reads a RuntimeBundle YAML and stores it in the Forge database.
+Returns the bundle ID (content-hash prefix) used by 'forge bundle assign'.
+
+The bundle is not yet delivered to any node — use 'forge bundle assign' next.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			content, err := os.ReadFile(args[0])
+			if err != nil {
+				return fmt.Errorf("read bundle: %w", err)
+			}
+
+			// Parse to extract node_id and generation for display.
+			var meta struct {
+				Metadata struct {
+					NodeID     string `yaml:"node_id"`
+					Generation int    `yaml:"generation"`
+					IssuedAt   string `yaml:"issued_at"`
+				} `yaml:"metadata"`
+			}
+			_ = yaml.Unmarshal(content, &meta)
+			if meta.Metadata.NodeID == "" {
+				return fmt.Errorf("bundle missing metadata.node_id")
+			}
+			if meta.Metadata.Generation < 1 {
+				return fmt.Errorf("bundle metadata.generation must be >= 1")
+			}
+
+			db, err := forgedb.Open(dbPath)
+			if err != nil {
+				return err
+			}
+			defer db.Close()
+
+			issuedAt := time.Now().UTC()
+			if meta.Metadata.IssuedAt != "" {
+				if t, err := time.Parse(time.RFC3339, meta.Metadata.IssuedAt); err == nil {
+					issuedAt = t
+				}
+			}
+
+			// Use forgedb to store.
+			id, err := db.SaveRuntimeBundle(
+				meta.Metadata.NodeID,
+				meta.Metadata.Generation,
+				content,
+				hashContent(content),
+				issuedAt,
+			)
+			if err != nil {
+				return fmt.Errorf("save bundle: %w", err)
+			}
+			fmt.Fprintf(os.Stderr, "OK  bundle registered\n")
+			fmt.Fprintf(os.Stderr, "    id=%s  node=%s  generation=%d\n",
+				id, meta.Metadata.NodeID, meta.Metadata.Generation)
+			fmt.Fprintf(os.Stderr, "    Next: forge bundle assign %s --bundle %s\n",
+				meta.Metadata.NodeID, id)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&dbPath, "db", "/var/lib/kernloom/forge.db", "path to forge database")
+	return cmd
+}
+
+// forge bundle assign — assign a registered bundle to a node.
+func bundleAssignCmd() *cobra.Command {
+	var (
+		dbPath   string
+		bundleID string
+	)
+	cmd := &cobra.Command{
+		Use:   "assign <node-id>",
+		Short: "Assign a registered RuntimeBundle to a node",
+		Long: `Assigns a registered bundle to a node so it is delivered on the next heartbeat.
+
+The node must be enrolled and approved. KLIQ pulls the bundle automatically
+during the next heartbeat cycle (default every 60s) and applies it without restart.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if bundleID == "" {
+				return fmt.Errorf("--bundle is required")
+			}
+			db, err := forgedb.Open(dbPath)
+			if err != nil {
+				return err
+			}
+			defer db.Close()
+			if err := db.AssignRuntimeBundle(args[0], bundleID, "operator"); err != nil {
+				return err
+			}
+			fmt.Fprintf(os.Stderr, "OK  node %s → bundle %s\n", args[0], bundleID)
+			fmt.Fprintf(os.Stderr, "    KLIQ picks it up on the next heartbeat (no restart needed).\n")
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&dbPath, "db", "/var/lib/kernloom/forge.db", "path to forge database")
+	cmd.Flags().StringVar(&bundleID, "bundle", "", "bundle ID returned by 'forge bundle register'")
+	_ = cmd.MarkFlagRequired("bundle")
+	return cmd
+}
+
+// forge bundle list — show registered bundles and current assignment for a node.
+func bundleListCmd() *cobra.Command {
+	var dbPath string
+	cmd := &cobra.Command{
+		Use:   "list <node-id>",
+		Short: "List registered bundles and current assignment for a node",
+		Long: `Shows the bundle currently assigned to a node and its lifecycle status.
+Also shows any pending baseline proposals the node has uploaded.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			nodeID := args[0]
+			db, err := forgedb.Open(dbPath)
+			if err != nil {
+				return err
+			}
+			defer db.Close()
+
+			content, generation, err := db.GetAssignedBundle(nodeID)
+			if err != nil {
+				return fmt.Errorf("query bundle: %w", err)
+			}
+			if content == nil {
+				fmt.Printf("node %s: no bundle assigned\n", nodeID)
+			} else {
+				var meta struct {
+					Metadata struct {
+						NodeID     string `yaml:"node_id"`
+						Generation int    `yaml:"generation"`
+						IssuedAt   string `yaml:"issued_at"`
+						ExpiresAt  string `yaml:"expires_at"`
+					} `yaml:"metadata"`
+					Spec struct {
+						FeatureProfile string `yaml:"feature_profile"`
+					} `yaml:"spec"`
+				}
+				_ = yaml.Unmarshal(content, &meta)
+				fmt.Printf("node:              %s\n", nodeID)
+				fmt.Printf("bundle generation: %d\n", generation)
+				fmt.Printf("feature profile:   %s\n", meta.Spec.FeatureProfile)
+				fmt.Printf("issued_at:         %s\n", meta.Metadata.IssuedAt)
+				if meta.Metadata.ExpiresAt != "" {
+					fmt.Printf("expires_at:        %s\n", meta.Metadata.ExpiresAt)
+				}
+				fmt.Printf("bundle size:       %d bytes\n", len(content))
+			}
+
+			proposals, err := db.ListBaselineProposals(nodeID)
+			if err == nil && len(proposals) > 0 {
+				fmt.Printf("\nbaseline proposals:\n")
+				for _, p := range proposals {
+					fmt.Printf("  id=%-20s status=%-10s created=%s\n",
+						p["id"], p["status"], p["created_at"])
+				}
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&dbPath, "db", "/var/lib/kernloom/forge.db", "path to forge database")
+	return cmd
+}
+
+func hashContent(b []byte) string {
+	h := sha256.Sum256(b)
+	return hex.EncodeToString(h[:])
 }
