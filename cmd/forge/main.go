@@ -87,7 +87,6 @@ func rootCmd() *cobra.Command {
 		Short: "Kernloom Forge — policy compiler and registry validator",
 	}
 	root.AddCommand(registryCmd())
-	root.AddCommand(nodeCmd())
 	root.AddCommand(policyCmd())
 	root.AddCommand(compileCmd())
 	root.AddCommand(packCmd())
@@ -1975,11 +1974,22 @@ Use these commands for manual inspection and assignment.`,
 }
 
 func adapterListCmd() *cobra.Command {
-	var dbPath string
-	return &cobra.Command{
+	var dbPath, adaptersDir string
+	cmd := &cobra.Command{
 		Use:   "list",
-		Short: "List registered adapter definitions",
+		Short: "List available adapter definitions",
+		Long: `List adapter definitions from two sources:
+
+Without --db: reads directly from registries/adapters/ on disk.
+With    --db: reads from the Forge database (registered on forge serve startup).
+
+Use without --db to see what's available before starting forge serve.
+Use with --db to see what's actually registered and active.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// Without DB: read from filesystem directly.
+			if !cmd.Flags().Changed("db") {
+				return listAdaptersFromDir(resolveAdapterDefsDir(adaptersDir))
+			}
 			db, err := forgedb.Open(dbPath)
 			if err != nil {
 				return err
@@ -1990,7 +2000,7 @@ func adapterListCmd() *cobra.Command {
 				return err
 			}
 			if len(defs) == 0 {
-				fmt.Println("no adapter definitions registered (start forge serve to auto-register)")
+				fmt.Println("no adapter definitions in DB (start forge serve to auto-register from registries/adapters/)")
 				return nil
 			}
 			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
@@ -2005,6 +2015,67 @@ func adapterListCmd() *cobra.Command {
 			return w.Flush()
 		},
 	}
+	cmd.Flags().StringVar(&dbPath, "db", "/var/lib/kernloom/forge.db", "path to forge database")
+	cmd.Flags().StringVar(&adaptersDir, "adapters", "registries/adapters", "path to adapter definitions directory")
+	return cmd
+}
+
+// listAdaptersFromDir reads and prints adapter definitions directly from YAML files.
+func listAdaptersFromDir(dir string) error {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			fmt.Fprintf(os.Stderr, "directory not found: %s\n", dir)
+			return nil
+		}
+		return err
+	}
+
+	type row struct{ id, name, version, file string }
+	var rows []row
+
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".yaml") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			continue
+		}
+		var meta struct {
+			Metadata struct {
+				ID      string `yaml:"id"`
+				Name    string `yaml:"name"`
+				Version string `yaml:"version"`
+			} `yaml:"metadata"`
+		}
+		if yaml.Unmarshal(data, &meta) != nil || meta.Metadata.ID == "" {
+			continue
+		}
+		name := meta.Metadata.Name
+		if name == "" {
+			name = meta.Metadata.ID
+		}
+		version := meta.Metadata.Version
+		if version == "" {
+			version = "1.0.0"
+		}
+		rows = append(rows, row{meta.Metadata.ID, name, version, e.Name()})
+	}
+
+	if len(rows) == 0 {
+		fmt.Printf("no adapter definitions found in %s\n", dir)
+		return nil
+	}
+
+	sort.Slice(rows, func(i, j int) bool { return rows[i].id < rows[j].id })
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "ID\tNAME\tVERSION\tFILE")
+	for _, r := range rows {
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", r.id, r.name, r.version, r.file)
+	}
+	return w.Flush()
 }
 
 func adapterShowCmd() *cobra.Command {
