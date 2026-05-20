@@ -165,7 +165,10 @@ func (d *DB) UpsertNode(id, mode string) error {
 	_, err := d.db.Exec(`
 		INSERT INTO nodes(id, mode, status, enrolled_at)
 		VALUES (?, ?, 'pending', CURRENT_TIMESTAMP)
-		ON CONFLICT(id) DO UPDATE SET mode=excluded.mode
+		ON CONFLICT(id) DO UPDATE SET
+			mode       = excluded.mode,
+			status     = 'pending',
+			enrolled_at = excluded.enrolled_at
 	`, id, mode)
 	return err
 }
@@ -272,8 +275,14 @@ func (d *DB) UseEnrollmentToken(token string) (nodeID string, err error) {
 	if usedAt.Valid {
 		return "", fmt.Errorf("enrollment token already used")
 	}
-	expires, _ := time.Parse(time.DateTime, expiresStr)
-	if time.Now().UTC().After(expires) {
+	// modernc.org/sqlite returns DATETIME columns as RFC3339 when scanned into
+	// a *string, regardless of how the value was originally stored.
+	expires, parseErr := time.Parse(time.RFC3339, expiresStr)
+	if parseErr != nil {
+		// Fallback: try the plain datetime format used by older rows.
+		expires, parseErr = time.Parse(time.DateTime, expiresStr)
+	}
+	if parseErr != nil || time.Now().UTC().After(expires) {
 		return "", fmt.Errorf("enrollment token expired")
 	}
 	_, err = d.db.Exec(`UPDATE enrollment_tokens SET used_at=CURRENT_TIMESTAMP WHERE token=?`, token)
@@ -467,6 +476,188 @@ func (d *DB) SaveBaselineProposal(nodeID, proposalHash string, content []byte) (
 		VALUES (?, ?, ?, ?)
 	`, id, nodeID, proposalHash, content)
 	return id, err
+}
+
+// ── Pack list ─────────────────────────────────────────────────────────────────
+
+// PackListItem holds display info for one registered pack.
+type PackListItem struct {
+	ID         string
+	Name       string
+	Size       int
+	CreatedAt  string
+	AssignedTo string // comma-separated node IDs, empty if unassigned
+}
+
+// ListPacks returns all registered policy packs with assignment info.
+func (d *DB) ListPacks() ([]PackListItem, error) {
+	rows, err := d.db.Query(`
+		SELECT pp.id, pp.name, length(pp.content), pp.created_at,
+		       COALESCE(GROUP_CONCAT(pa.node_id), '')
+		FROM policy_packs pp
+		LEFT JOIN pack_assignments pa ON pa.pack_id = pp.id
+		GROUP BY pp.id
+		ORDER BY pp.created_at DESC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []PackListItem
+	for rows.Next() {
+		var item PackListItem
+		if err := rows.Scan(&item.ID, &item.Name, &item.Size, &item.CreatedAt, &item.AssignedTo); err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+// ── Bundle list ───────────────────────────────────────────────────────────────
+
+// BundleListItem holds display info for one registered bundle.
+type BundleListItem struct {
+	ID         string
+	NodeID     string // from bundle metadata
+	Generation int
+	Size       int
+	IssuedAt   string
+	ExpiresAt  string
+	AssignedTo string // node that currently has this bundle assigned
+}
+
+// ListAllBundles returns all registered runtime bundles with assignment info.
+func (d *DB) ListAllBundles() ([]BundleListItem, error) {
+	rows, err := d.db.Query(`
+		SELECT rb.id, rb.node_id, rb.generation, length(rb.content), rb.issued_at,
+		       COALESCE(ra.node_id, '')
+		FROM runtime_bundles rb
+		LEFT JOIN runtime_assignments ra ON ra.bundle_id = rb.id
+		ORDER BY rb.issued_at DESC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []BundleListItem
+	for rows.Next() {
+		var item BundleListItem
+		if err := rows.Scan(&item.ID, &item.NodeID, &item.Generation, &item.Size, &item.IssuedAt, &item.AssignedTo); err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+// ── Token list + revoke ───────────────────────────────────────────────────────
+
+// TokenListItem holds display info for one enrollment token (value never exposed).
+type TokenListItem struct {
+	Prefix    string // first 20 chars + "..."
+	NodeID    string
+	ExpiresAt string
+	UsedAt    string
+	Status    string // active | used | expired
+}
+
+// ListTokens returns all enrollment tokens with status but without the full token value.
+func (d *DB) ListTokens() ([]TokenListItem, error) {
+	rows, err := d.db.Query(`
+		SELECT token, COALESCE(node_id,''), expires_at, COALESCE(used_at,'')
+		FROM enrollment_tokens
+		ORDER BY expires_at DESC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	now := time.Now().UTC()
+	var out []TokenListItem
+	for rows.Next() {
+		var tok, nid, exp, used string
+		if err := rows.Scan(&tok, &nid, &exp, &used); err != nil {
+			return nil, err
+		}
+		prefix := tok
+		if len(tok) > 20 {
+			prefix = tok[:20] + "..."
+		}
+		status := "active"
+		if used != "" {
+			status = "used"
+		} else {
+			expires, parseErr := time.Parse(time.RFC3339, exp)
+			if parseErr != nil {
+				expires, _ = time.Parse(time.DateTime, exp)
+			}
+			if now.After(expires) {
+				status = "expired"
+			}
+		}
+		out = append(out, TokenListItem{
+			Prefix:    prefix,
+			NodeID:    nid,
+			ExpiresAt: exp,
+			UsedAt:    used,
+			Status:    status,
+		})
+	}
+	return out, rows.Err()
+}
+
+// RevokeToken deletes tokens matching the given prefix. Returns the number deleted.
+func (d *DB) RevokeToken(prefix string) (int, error) {
+	res, err := d.db.Exec(`DELETE FROM enrollment_tokens WHERE token LIKE ? AND used_at IS NULL`, prefix+"%")
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
+// NodeListItem combines node info with assigned pack and bundle for display.
+type NodeListItem struct {
+	Node
+	AssignedPack   string
+	AssignedBundle string
+	BundleGen      int
+	LastSeen       string
+}
+
+// ListNodesDetail returns nodes enriched with pack and bundle assignment info.
+func (d *DB) ListNodesDetail() ([]NodeListItem, error) {
+	rows, err := d.db.Query(`
+		SELECT n.id, n.mode, n.status, n.enrolled_at, COALESCE(n.last_seen,''),
+		       COALESCE(pa.pack_id,''), COALESCE(ra.bundle_id,''), COALESCE(rb.generation, 0)
+		FROM nodes n
+		LEFT JOIN pack_assignments pa ON pa.node_id = n.id
+		LEFT JOIN runtime_assignments ra ON ra.node_id = n.id
+		LEFT JOIN runtime_bundles rb ON rb.id = ra.bundle_id
+		ORDER BY n.enrolled_at DESC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []NodeListItem
+	for rows.Next() {
+		var item NodeListItem
+		var enrolledStr, lastSeen string
+		if err := rows.Scan(&item.ID, &item.Mode, &item.Status, &enrolledStr, &lastSeen,
+			&item.AssignedPack, &item.AssignedBundle, &item.BundleGen); err != nil {
+			return nil, err
+		}
+		item.LastSeen = lastSeen
+		if t, err := time.Parse(time.RFC3339, enrolledStr); err == nil {
+			item.EnrolledAt = t
+		} else if t, err := time.Parse(time.DateTime, enrolledStr); err == nil {
+			item.EnrolledAt = t
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
 }
 
 // ListBaselineProposals returns pending proposals for a node.

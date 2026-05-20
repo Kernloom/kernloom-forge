@@ -14,7 +14,9 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"text/tabwriter"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -728,6 +730,8 @@ Example:
 	cmd.Flags().StringVar(&signingKeyPath, "signing-key", "", "path to Ed25519 private key for signing the pack")
 	cmd.AddCommand(packRegisterCmd())
 	cmd.AddCommand(packBuildCmd())
+	cmd.AddCommand(packListCmd())
+	cmd.AddCommand(packAssignCmd())
 	return cmd
 }
 
@@ -1175,7 +1179,73 @@ Example — pipeline gate (fails build on deny):
 func tokenCmd() *cobra.Command {
 	root := &cobra.Command{Use: "token", Short: "Manage enrollment tokens"}
 	root.AddCommand(tokenCreateCmd())
+	root.AddCommand(tokenListCmd())
+	root.AddCommand(tokenRevokeCmd())
 	return root
+}
+
+func tokenListCmd() *cobra.Command {
+	var dbPath string
+	cmd := &cobra.Command{
+		Use:   "list",
+		Short: "List enrollment tokens (token value is never shown)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			db, err := forgedb.Open(dbPath)
+			if err != nil {
+				return err
+			}
+			defer db.Close()
+			tokens, err := db.ListTokens()
+			if err != nil {
+				return err
+			}
+			if len(tokens) == 0 {
+				fmt.Println("no enrollment tokens found")
+				return nil
+			}
+			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+			fmt.Fprintln(w, "PREFIX\tNODE\tSTATUS\tEXPIRES")
+			for _, t := range tokens {
+				node := t.NodeID
+				if node == "" {
+					node = "(any)"
+				}
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", t.Prefix, node, t.Status, t.ExpiresAt)
+			}
+			w.Flush()
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&dbPath, "db", "/var/lib/kernloom/forge.db", "path to forge database")
+	return cmd
+}
+
+func tokenRevokeCmd() *cobra.Command {
+	var dbPath string
+	cmd := &cobra.Command{
+		Use:   "revoke <token-prefix>",
+		Short: "Revoke unused tokens matching a prefix",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			db, err := forgedb.Open(dbPath)
+			if err != nil {
+				return err
+			}
+			defer db.Close()
+			n, err := db.RevokeToken(args[0])
+			if err != nil {
+				return err
+			}
+			if n == 0 {
+				fmt.Fprintf(os.Stderr, "no unused tokens found matching prefix %q\n", args[0])
+			} else {
+				fmt.Fprintf(os.Stderr, "OK  revoked %d token(s) matching %q\n", n, args[0])
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&dbPath, "db", "/var/lib/kernloom/forge.db", "path to forge database")
+	return cmd
 }
 
 func tokenCreateCmd() *cobra.Command {
@@ -1229,34 +1299,63 @@ func nodesCmd() *cobra.Command {
 	root.AddCommand(nodesListCmd())
 	root.AddCommand(nodesApproveCmd())
 	root.AddCommand(nodesRevokeCmd())
-	root.AddCommand(nodesAssignPackCmd())
 	return root
 }
 
 func nodesListCmd() *cobra.Command {
-	var dbPath string
+	var dbPath, sortBy string
 	cmd := &cobra.Command{
 		Use:   "list",
-		Short: "List enrolled nodes",
+		Short: "List enrolled nodes with pack and bundle assignment",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			db, err := forgedb.Open(dbPath)
 			if err != nil {
 				return err
 			}
 			defer db.Close()
-			nodes, err := db.ListNodes()
+			nodes, err := db.ListNodesDetail()
 			if err != nil {
 				return err
 			}
-			fmt.Printf("%-30s %-12s %-10s %s\n", "NODE-ID", "MODE", "STATUS", "ENROLLED")
-			for _, n := range nodes {
-				fmt.Printf("%-30s %-12s %-10s %s\n",
-					n.ID, n.Mode, n.Status, n.EnrolledAt.Format("2006-01-02 15:04"))
+			switch sortBy {
+			case "status":
+				sort.Slice(nodes, func(i, j int) bool { return nodes[i].Status < nodes[j].Status })
+			case "id":
+				sort.Slice(nodes, func(i, j int) bool { return nodes[i].ID < nodes[j].ID })
+			case "pack":
+				sort.Slice(nodes, func(i, j int) bool { return nodes[i].AssignedPack < nodes[j].AssignedPack })
+			default: // enrolled date, newest first
+				sort.Slice(nodes, func(i, j int) bool { return nodes[i].EnrolledAt.After(nodes[j].EnrolledAt) })
 			}
+			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+			fmt.Fprintln(w, "NODE-ID\tSTATUS\tPACK\tBUNDLE-GEN\tENROLLED\tLAST-SEEN")
+			for _, n := range nodes {
+				enrolled := n.EnrolledAt.Format("2006-01-02 15:04")
+				lastSeen := n.LastSeen
+				if lastSeen != "" {
+					if t, err := time.Parse(time.RFC3339, lastSeen); err == nil {
+						lastSeen = t.Local().Format("2006-01-02 15:04")
+					} else if t, err := time.Parse(time.DateTime, lastSeen); err == nil {
+						lastSeen = t.Local().Format("2006-01-02 15:04")
+					}
+				}
+				bundleGen := ""
+				if n.BundleGen > 0 {
+					bundleGen = fmt.Sprintf("gen%d", n.BundleGen)
+				}
+				pack := n.AssignedPack
+				if pack == "" {
+					pack = "-"
+				}
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
+					n.ID, n.Status, pack, bundleGen, enrolled, lastSeen)
+			}
+			w.Flush()
 			return nil
 		},
 	}
 	cmd.Flags().StringVar(&dbPath, "db", "/var/lib/kernloom/forge.db", "path to forge database")
+	cmd.Flags().StringVar(&sortBy, "sort", "enrolled", "sort by: enrolled|status|id|pack")
 	return cmd
 }
 
@@ -1306,31 +1405,83 @@ func nodesRevokeCmd() *cobra.Command {
 	return cmd
 }
 
-func nodesAssignPackCmd() *cobra.Command {
-	var dbPath string
-	var packName string
+// ── forge pack list ───────────────────────────────────────────────────────────
+
+func packListCmd() *cobra.Command {
+	var dbPath, sortBy string
+	var all bool
 	cmd := &cobra.Command{
-		Use:   "assign-pack <node-id>",
-		Short: "Assign a registered pack to a node",
-		Args:  cobra.ExactArgs(1),
+		Use:   "list",
+		Short: "List registered policy packs",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if packName == "" {
-				return fmt.Errorf("--pack is required")
-			}
 			db, err := forgedb.Open(dbPath)
 			if err != nil {
 				return err
 			}
 			defer db.Close()
-			if err := db.AssignPack(args[0], packName, "operator"); err != nil {
+			packs, err := db.ListPacks()
+			if err != nil {
 				return err
 			}
-			fmt.Fprintf(os.Stderr, "OK  node %s → pack %s\n", args[0], packName)
+			switch sortBy {
+			case "name":
+				sort.Slice(packs, func(i, j int) bool { return packs[i].Name < packs[j].Name })
+			case "size":
+				sort.Slice(packs, func(i, j int) bool { return packs[i].Size > packs[j].Size })
+			case "assigned":
+				sort.Slice(packs, func(i, j int) bool { return packs[i].AssignedTo > packs[j].AssignedTo })
+			default: // created, newest first
+			}
+			const maxDefault = 20
+			shown := packs
+			if !all && len(packs) > maxDefault {
+				shown = packs[:maxDefault]
+			}
+			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+			fmt.Fprintln(w, "NAME\tSIZE\tASSIGNED-TO\tCREATED")
+			for _, p := range shown {
+				assigned := p.AssignedTo
+				if assigned == "" {
+					assigned = "-"
+				}
+				fmt.Fprintf(w, "%s\t%d B\t%s\t%s\n", p.Name, p.Size, assigned, p.CreatedAt)
+			}
+			w.Flush()
+			if !all && len(packs) > maxDefault {
+				fmt.Fprintf(os.Stderr, "\n... and %d more (use --all to show everything)\n", len(packs)-maxDefault)
+			}
 			return nil
 		},
 	}
 	cmd.Flags().StringVar(&dbPath, "db", "/var/lib/kernloom/forge.db", "path to forge database")
-	cmd.Flags().StringVar(&packName, "pack", "", "name of the registered pack to assign")
+	cmd.Flags().StringVar(&sortBy, "sort", "created", "sort by: created|name|size|assigned")
+	cmd.Flags().BoolVar(&all, "all", false, "show all packs (default: first 20)")
+	return cmd
+}
+
+// ── forge pack assign ─────────────────────────────────────────────────────────
+
+func packAssignCmd() *cobra.Command {
+	var dbPath string
+	cmd := &cobra.Command{
+		Use:   "assign <pack-name> <node-id>",
+		Short: "Assign a registered pack to a node",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			packName, nodeID := args[0], args[1]
+			db, err := forgedb.Open(dbPath)
+			if err != nil {
+				return err
+			}
+			defer db.Close()
+			if err := db.AssignPack(nodeID, packName, "operator"); err != nil {
+				return err
+			}
+			fmt.Fprintf(os.Stderr, "OK  pack %s → node %s\n", packName, nodeID)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&dbPath, "db", "/var/lib/kernloom/forge.db", "path to forge database")
 	return cmd
 }
 
@@ -1647,21 +1798,49 @@ during the next heartbeat cycle (default every 60s) and applies it without resta
 
 // forge bundle list — show registered bundles and current assignment for a node.
 func bundleListCmd() *cobra.Command {
-	var dbPath string
+	var dbPath, sortBy string
 	cmd := &cobra.Command{
-		Use:   "list <node-id>",
-		Short: "List registered bundles and current assignment for a node",
-		Long: `Shows the bundle currently assigned to a node and its lifecycle status.
-Also shows any pending baseline proposals the node has uploaded.`,
-		Args: cobra.ExactArgs(1),
+		Use:   "list [node-id]",
+		Short: "List bundles — omit node-id for all bundles, or specify a node for details",
+		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			nodeID := args[0]
 			db, err := forgedb.Open(dbPath)
 			if err != nil {
 				return err
 			}
 			defer db.Close()
 
+			// No node-id: show global table of all bundles.
+			if len(args) == 0 {
+				bundles, err := db.ListAllBundles()
+				if err != nil {
+					return err
+				}
+				switch sortBy {
+				case "node":
+					sort.Slice(bundles, func(i, j int) bool { return bundles[i].NodeID < bundles[j].NodeID })
+				case "gen":
+					sort.Slice(bundles, func(i, j int) bool { return bundles[i].Generation > bundles[j].Generation })
+				case "assigned":
+					sort.Slice(bundles, func(i, j int) bool { return bundles[i].AssignedTo > bundles[j].AssignedTo })
+				default: // issued_at, newest first (already sorted by DB)
+				}
+				w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+				fmt.Fprintln(w, "ID\tNODE\tGEN\tSIZE\tASSIGNED-TO\tISSUED")
+				for _, b := range bundles {
+					assigned := b.AssignedTo
+					if assigned == "" {
+						assigned = "-"
+					}
+					fmt.Fprintf(w, "%s\t%s\t%d\t%d B\t%s\t%s\n",
+						b.ID, b.NodeID, b.Generation, b.Size, assigned, b.IssuedAt)
+				}
+				w.Flush()
+				return nil
+			}
+
+			// Node-id given: detailed view for one node.
+			nodeID := args[0]
 			content, generation, err := db.GetAssignedBundle(nodeID)
 			if err != nil {
 				return fmt.Errorf("query bundle: %w", err)
@@ -1690,7 +1869,6 @@ Also shows any pending baseline proposals the node has uploaded.`,
 				}
 				fmt.Printf("bundle size:       %d bytes\n", len(content))
 			}
-
 			proposals, err := db.ListBaselineProposals(nodeID)
 			if err == nil && len(proposals) > 0 {
 				fmt.Printf("\nbaseline proposals:\n")
@@ -1703,6 +1881,7 @@ Also shows any pending baseline proposals the node has uploaded.`,
 		},
 	}
 	cmd.Flags().StringVar(&dbPath, "db", "/var/lib/kernloom/forge.db", "path to forge database")
+	cmd.Flags().StringVar(&sortBy, "sort", "issued", "sort by (global list): issued|node|gen|assigned")
 	return cmd
 }
 
