@@ -1370,9 +1370,8 @@ func nodesListCmd() *cobra.Command {
 				sort.Slice(nodes, func(i, j int) bool { return nodes[i].EnrolledAt.After(nodes[j].EnrolledAt) })
 			}
 			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "NODE-ID\tSTATUS\tPACK\tBUNDLE-GEN\tENROLLED\tLAST-SEEN")
+			fmt.Fprintln(w, "NODE-ID\tSTATUS\tADAPTER\tAUTO\tPACK\tBUNDLE-GEN\tLAST-SEEN")
 			for _, n := range nodes {
-				enrolled := n.EnrolledAt.Format("2006-01-02 15:04")
 				lastSeen := n.LastSeen
 				if lastSeen != "" {
 					if t, err := time.Parse(time.RFC3339, lastSeen); err == nil {
@@ -1381,7 +1380,7 @@ func nodesListCmd() *cobra.Command {
 						lastSeen = t.Local().Format("2006-01-02 15:04")
 					}
 				}
-				bundleGen := ""
+				bundleGen := "-"
 				if n.BundleGen > 0 {
 					bundleGen = fmt.Sprintf("gen%d", n.BundleGen)
 				}
@@ -1389,8 +1388,21 @@ func nodesListCmd() *cobra.Command {
 				if pack == "" {
 					pack = "-"
 				}
-				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
-					n.ID, n.Status, pack, bundleGen, enrolled, lastSeen)
+				adapter := n.AdapterDef
+				if adapter == "" {
+					adapter = "-"
+				} else if n.AdapterBy == "auto" {
+					adapter += " (auto)"
+				}
+				autoFlag := "no"
+				if n.AutoEligible {
+					autoFlag = "yes"
+				}
+				if lastSeen == "" {
+					lastSeen = "-"
+				}
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+					n.ID, n.Status, adapter, autoFlag, pack, bundleGen, lastSeen)
 			}
 			w.Flush()
 			return nil

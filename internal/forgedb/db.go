@@ -708,17 +708,23 @@ type NodeListItem struct {
 	AssignedBundle string
 	BundleGen      int
 	LastSeen       string
+	AdapterDef     string // assigned adapter definition ID (e.g. "klshield")
+	AdapterBy      string // "operator" | "auto" | ""
+	AutoEligible   bool   // node opted into auto-assignment
 }
 
-// ListNodesDetail returns nodes enriched with pack and bundle assignment info.
+// ListNodesDetail returns nodes enriched with pack, bundle, and adapter definition info.
 func (d *DB) ListNodesDetail() ([]NodeListItem, error) {
 	rows, err := d.db.Query(`
 		SELECT n.id, n.mode, n.status, n.enrolled_at, COALESCE(n.last_seen,''),
-		       COALESCE(pa.pack_id,''), COALESCE(ra.bundle_id,''), COALESCE(rb.generation, 0)
+		       COALESCE(pa.pack_id,''), COALESCE(ra.bundle_id,''), COALESCE(rb.generation, 0),
+		       COALESCE(naa.definition_id,''), COALESCE(naa.assigned_by,''),
+		       COALESCE(naa.auto_eligible, 0)
 		FROM nodes n
 		LEFT JOIN pack_assignments pa ON pa.node_id = n.id
 		LEFT JOIN runtime_assignments ra ON ra.node_id = n.id
 		LEFT JOIN runtime_bundles rb ON rb.id = ra.bundle_id
+		LEFT JOIN node_adapter_assignments naa ON naa.node_id = n.id
 		ORDER BY n.enrolled_at DESC
 	`)
 	if err != nil {
@@ -729,11 +735,14 @@ func (d *DB) ListNodesDetail() ([]NodeListItem, error) {
 	for rows.Next() {
 		var item NodeListItem
 		var enrolledStr, lastSeen string
+		var autoElig int
 		if err := rows.Scan(&item.ID, &item.Mode, &item.Status, &enrolledStr, &lastSeen,
-			&item.AssignedPack, &item.AssignedBundle, &item.BundleGen); err != nil {
+			&item.AssignedPack, &item.AssignedBundle, &item.BundleGen,
+			&item.AdapterDef, &item.AdapterBy, &autoElig); err != nil {
 			return nil, err
 		}
 		item.LastSeen = lastSeen
+		item.AutoEligible = autoElig == 1
 		if t, err := time.Parse(time.RFC3339, enrolledStr); err == nil {
 			item.EnrolledAt = t
 		} else if t, err := time.Parse(time.DateTime, enrolledStr); err == nil {
