@@ -1,7 +1,16 @@
 compiler_rules:
+  # ── Access ────────────────────────────────────────────────────────────────────
+
   - id: compile.access.relation.allow
     intent: access.relation.allow
     targets:
+      - capability: enforce.access.allow
+        domain: access
+        required_granularity: [tuple_5]
+        priority: 5
+        when:
+          relation_type: network_tuple
+
       - capability: enforce.network.allow
         domain: network
         required_granularity: [tuple_5]
@@ -26,23 +35,40 @@ compiler_rules:
   - id: compile.access.relation.default_deny
     intent: access.relation.default_deny
     targets:
+      - capability: enforce.access.default_deny
+        domain: access
+        required_granularity: [interface, direction]
+        priority: 5
+
       - capability: enforce.network.default_deny
         domain: network
         required_granularity: [interface, direction]
         priority: 10
 
+  # ── Protection ────────────────────────────────────────────────────────────────
+
   - id: compile.protection.source.quarantine
     intent: protection.source.quarantine
     targets:
+      - capability: enforce.access.deny
+        domain: access
+        required_granularity: [src_ip]
+        priority: 5
+
       - capability: enforce.network.deny
         domain: network
         required_granularity: [src_ip]
         priority: 10
 
+      - capability: enforce.traffic.rate_limit
+        domain: traffic
+        required_granularity: [src_ip]
+        priority: 20
+
       - capability: enforce.network.rate_limit
         domain: network
         required_granularity: [src_ip]
-        priority: 20
+        priority: 25
 
   - id: compile.protection.dos.prevent
     intent: protection.dos.prevent
@@ -61,6 +87,80 @@ compiler_rules:
         domain: network
         required_granularity: [src_ip]
         priority: 30
+
+  - id: compile.protection.dos.mitigate
+    intent: protection.dos.mitigate
+    targets:
+      - capability: enforce.traffic.rate_limit
+        domain: traffic
+        required_granularity: [src_ip]
+        priority: 10
+
+      - capability: enforce.traffic.connection_limit
+        domain: traffic
+        required_granularity: [src_ip]
+        priority: 20
+
+      - capability: enforce.traffic.drop
+        domain: traffic
+        required_granularity: [src_ip]
+        priority: 30
+
+      - capability: enforce.access.deny
+        domain: access
+        required_granularity: [src_ip]
+        priority: 40
+
+  - id: compile.protection.abuse.mitigate
+    intent: protection.abuse.mitigate
+    targets:
+      - capability: enforce.traffic.rate_limit
+        domain: traffic
+        required_granularity: [src_ip]
+        priority: 10
+
+      - capability: enforce.traffic.tarpit
+        domain: traffic
+        required_granularity: [src_ip]
+        priority: 15
+
+      - capability: enforce.access.deny
+        domain: access
+        required_granularity: [src_ip]
+        priority: 20
+
+  # ── Relation ─────────────────────────────────────────────────────────────────
+
+  - id: compile.relation.learn
+    intent: relation.learn
+    targets:
+      - capability: analyze.relation.learn
+        domain: relation
+        required_granularity: [relation]
+        priority: 10
+
+  - id: compile.relation.freeze
+    intent: relation.freeze
+    targets:
+      - capability: analyze.relation.freeze
+        domain: relation
+        required_granularity: [relation]
+        priority: 10
+
+      - capability: analyze.relation.export_allowlist
+        domain: relation
+        required_granularity: [relation]
+        priority: 20
+
+  - id: compile.relation.enforce_known_only
+    intent: relation.enforce_known_only
+    targets:
+      - capability: enforce.access.default_deny
+        domain: access
+        required_granularity: [interface, direction]
+        priority: 10
+
+  # ── Microsegmentation (legacy) ────────────────────────────────────────────────
 
   - id: compile.microsegmentation.learn
     intent: microsegmentation.learn
@@ -81,4 +181,32 @@ compiler_rules:
       - capability: analyze.relation.export_allowlist
         domain: relation
         required_granularity: [relation]
+        priority: 20
+
+  # ── Telemetry ─────────────────────────────────────────────────────────────────
+
+  - id: compile.telemetry.export
+    intent: telemetry.export
+    targets:
+      - capability: export.telemetry
+        domain: telemetry
+        required_granularity: [global]
+        priority: 10
+
+      - capability: export.event
+        domain: event
+        required_granularity: [global]
+        priority: 20
+
+  - id: compile.telemetry.alert
+    intent: telemetry.alert
+    targets:
+      - capability: sink.webhook
+        domain: event
+        required_granularity: [global]
+        priority: 10
+
+      - capability: sink.smtp
+        domain: event
+        required_granularity: [global]
         priority: 20

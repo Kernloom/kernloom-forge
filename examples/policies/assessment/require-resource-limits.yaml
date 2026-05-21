@@ -1,0 +1,37 @@
+kind: Policy
+apiVersion: forge.kernloom.io/v1alpha2
+
+metadata:
+  id: require-resource-limits
+  name: Require container resource limits
+  description: Containers without CPU/memory limits can cause noisy-neighbour issues.
+
+spec:
+  context: asset
+
+  requirements:
+    capabilities:
+      - assess.config.asset
+
+  rules:
+    - id: container-missing-resource-limits
+      when:
+        language: cel
+        expression: >
+          document.kind == "Deployment" &&
+          has(document.spec) &&
+          has(document.spec.template) &&
+          document.spec.template.spec.containers.exists(c,
+            !has(c.resources) || !has(c.resources.limits)
+          )
+      effects:
+        - type: violation
+          severity: error
+          field: "spec.template.spec.containers[*].resources.limits"
+          message: "All containers must declare resource limits (cpu and memory)"
+          remediation: >
+            Add a resources.limits block:
+              resources:
+                limits:
+                  cpu: "500m"
+                  memory: "256Mi"

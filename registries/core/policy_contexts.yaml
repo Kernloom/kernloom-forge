@@ -1,0 +1,104 @@
+policy_contexts:
+  # runtime: Live telemetry and enforcement decisions.
+  # KLIQ evaluates runtime policies per-source per-tick.
+  - id: runtime
+    description: >
+      Evaluate against live signals, baselines, risk scores and trust state.
+      Rules fire per-source-IP on each KLIQ tick. Effects produce enforcement
+      actions, recommendations or notifications.
+    available_objects:
+      - signals      # live metric values per source (network.metric.packets_per_second, ...)
+      - baselines    # learned EWMA statistics per source (upper_bound, confidence, phase)
+      - risk         # risk scores produced by the decision engine
+      - trust        # trust assertions from Kernloom Trust / Keylime
+      - inventory    # component runtime inventory of the node
+      - vars         # named bindings declared in spec.inputs.bindings
+    allowed_effects:
+      - action
+      - recommendation
+      - finding
+      - notify
+      - export
+    binding_sources:
+      - signal
+      - baseline
+
+  # asset: Static config / file / repository assessment.
+  # forge assess evaluates asset policies synchronously against submitted documents.
+  - id: asset
+    description: >
+      Evaluate a submitted config asset (YAML, JSON, HCL, etc.) against
+      policy rules using CEL. Forge does not know Kubernetes, NGINX or KLIQ
+      internals — the full parsed document is accessible via the "document"
+      CEL variable; asset metadata via "asset". Specific schema knowledge
+      lives in policy libraries, not in the Forge core.
+    available_objects:
+      - asset        # metadata about the submitted asset (asset_type, schema_id, format, path)
+      - document     # full parsed document content (map[string]any)
+      - files        # future: multiple files in a bundle
+      - schema       # future: schema validation results
+      - vars         # named bindings declared in spec.inputs.bindings (from: asset path: ...)
+    allowed_effects:
+      - violation
+      - finding
+      - notify
+      - export
+    binding_sources:
+      - asset
+
+  # inventory: Component inventory, capability drift and posture compliance.
+  - id: inventory
+    description: >
+      Evaluate the reported runtime inventory of a node against expected
+      profiles, capabilities and component constraints. Used to detect
+      missing adapters, unexpected components or configuration drift.
+    available_objects:
+      - node         # node identity and enrollment state
+      - components   # list of running component instances
+      - capabilities # capabilities declared by each component
+      - profiles     # component profiles active on the node
+      - constraints  # policy-defined expectations
+      - trust        # trust assertions if available
+    allowed_effects:
+      - finding
+      - decision
+      - recommendation
+      - notify
+    binding_sources: []
+
+  # trust: Attestation, posture and trust gating.
+  # Used when Kernloom Trust / Keylime is integrated.
+  - id: trust
+    description: >
+      Evaluate attestation results, trust levels and measurement validity.
+      Used to gate enforcement actions, restrict available capabilities or
+      trigger alerts when trust posture degrades.
+    available_objects:
+      - trust        # trust level, posture score, last verification time
+      - measurements # individual measurement results (PCR values, IMA log entries)
+      - node         # node identity
+      - component    # specific component under evaluation
+      - inventory    # full node inventory
+    allowed_effects:
+      - decision
+      - finding
+      - notify
+    binding_sources: []
+
+  # event: Event routing, enrichment and export.
+  - id: event
+    description: >
+      Evaluate a structured event against routing and enrichment rules.
+      Used to classify, filter, deduplicate or forward events to sinks.
+    available_objects:
+      - event        # the event being evaluated (severity, category, source, ...)
+      - source       # the originating component or node
+      - node         # node context
+      - component    # component context
+      - risk         # current risk state of the source
+      - trust        # current trust state of the source
+    allowed_effects:
+      - notify
+      - export
+      - recommendation
+    binding_sources: []

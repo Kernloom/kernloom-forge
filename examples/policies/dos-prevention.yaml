@@ -1,21 +1,62 @@
-kind: RuntimePolicy
-apiVersion: forge.kernloom.io/v1alpha1
+kind: Policy
+apiVersion: forge.kernloom.io/v1alpha2
 
 metadata:
-  id: block-critical-pps-source
-  description: Block a source whose anomaly severity is critical.
+  id: dos-prevention
+  name: DoS prevention — PPS baseline
+  description: >
+    Rate-limit a source when its packet rate exceeds the learned baseline.
+    Falls back to the global trigger when per-source confidence is too low.
+    Autonomy mode: KLIQ adapts the effective rate from its baseline model.
 
-when:
-  language: cel
-  expression: >
-    signals.anomaly.state.severity == "critical" &&
-    has(signals.network.entity.src_ip)
+spec:
+  context: runtime
+  intent: protection.dos.mitigate
 
-then:
-  - type: capability_action
-    capability: enforce.network.deny
-    target:
-      granularity: src_ip
-      value_from: signals.network.entity.src_ip
-    ttl: 30m
-    reason: critical_network_anomaly
+  requirements:
+    capabilities:
+      - observe.network.packet_summary
+      - enforce.traffic.rate_limit
+    min_granularity:
+      - src_ip
+    degradation:
+      allow: false
+
+  inputs:
+    bindings:
+      current_pps:
+        from: signal
+        id: network.metric.packets_per_second
+        scope: src_ip
+      src_upper:
+        from: baseline
+        signal: network.metric.packets_per_second
+        scope: src_ip
+        statistic: upper_bound
+      src_confidence:
+        from: baseline
+        signal: network.metric.packets_per_second
+        scope: src_ip
+        statistic: confidence
+      global_upper:
+        from: baseline
+        signal: network.metric.packets_per_second
+        scope: global
+        statistic: upper_bound
+
+  rules:
+    - id: spike-above-baseline
+      when:
+        language: cel
+        expression: >
+          (vars.src_confidence >= 0.5 && vars.current_pps > vars.src_upper * 1.5)
+          || (vars.src_confidence < 0.5 && vars.current_pps > vars.global_upper * 2.0)
+      effects:
+        - type: action
+          action: enforce.traffic.rate_limit
+          target:
+            granularity: src_ip
+            value_from: signals.network.entity.src_ip
+          constraints:
+            ttl: 10m
+          reason: pps_above_learned_baseline

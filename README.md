@@ -1,68 +1,205 @@
 # Kernloom Forge
 
-[![CI](https://github.com/Kernloom/kernloom-forge/actions/workflows/ci.yml/badge.svg)](https://github.com/Kernloom/kernloom-forge/actions/workflows/ci.yml)
+**Kernloom Forge** is the policy compiler and control plane for [Kernloom](https://kernloom.com).
+It owns the standardised Kernloom language — intents, capabilities, signals, granularities — and
+compiles abstract policies into node-specific enforcement plans for KLIQ nodes.
 
-**Kernloom Forge** is the policy compiler and control plane for [Kernloom](https://github.com/Kernloom/kernloom). It owns the standardised Kernloom language (intents, capabilities, signals) and compiles abstract policies into node-specific enforcement configurations for KLIQ.
+Forge does not enforce anything itself. It compiles, signs, and distributes.
+KLIQ enforces locally via its plugin adapters (KLShield, NGINX, OpenZiti, …).
 
-## What Forge does
+```
+Policy Author  →  forge compile  →  CompilerDecisionReport
+                                         ↓
+                                  CompiledPolicyPack (signed)
+                                         ↓
+                               KLIQ pulls & enforces locally
+```
 
-- **Registry validation** — loads and cross-validates the core Kernloom language registries
-- **Adapter manifest validation** — verifies adapter manifests against the registry
-- **Policy validation** — verifies policies reference only known intents, capabilities and signals
-- **Policy compilation** — translates abstract intents into concrete capability actions per node *(Phase 2)*
-- **Runtime config builder** — generates signed KLIQ runtime configs *(Phase 3)*
-- **Managed control plane** — node enrollment, heartbeats, drift detection *(Phase 4)*
+---
 
-## Install
+## What Forge does today
+
+| Feature | Status |
+|---|---|
+| Core registry loading and cross-validation | ✅ |
+| Node definition validation (v1alpha2) | ✅ |
+| Policy validation with CEL bindings and baseline requirements | ✅ |
+| Policy compiler — capability matching, scoring, decision report | ✅ |
+| `forge compile` CLI | ✅ |
+| Pack signing, managed server, enrollment | Phase 4 |
+
+---
+
+## Quick start
 
 ```bash
-go install github.com/kernloom/kernloom-forge/cmd/forge@latest
+# Run all tests
+make test
+
+# Validate the core registry, all node definitions, and all example policies
+make validate
+
+# Compile an example policy and see which nodes are selected
+make compile-example
+
+# Build the forge binary
+make build
+./bin/forge --help
 ```
 
-## Usage
+---
+
+## CLI
 
 ```bash
-# Validate core registry
-forge registry validate ./registries/core
+# Validate the core registry
+forge registry validate registries/core
 
-# Validate an adapter manifest
-forge adapter validate examples/adapters/klshield.manifest.yaml
+# Validate a node definition against the registry
+forge node validate registries/adapters/klshield.yaml
 
-# Validate a policy file
-forge policy validate examples/policies/dos-prevention.yaml
+# Validate a policy
+forge policy validate examples/policies/mitigate-connection-spike.yaml
+
+# Compile a policy against registered nodes
+forge compile examples/policies/mitigate-connection-spike.yaml \
+  --registry registries/core \
+  --nodes    registries/adapters
 ```
 
-## Repository structure
+The compiler outputs a `CompilerDecisionReport`:
+
+```yaml
+kind: CompilerDecisionReport
+apiVersion: forge.kernloom.io/v1alpha2
+status: success
+policy_id: mitigate-src-connection-spike
+selected_plan:
+  analyzers:
+    - node_id: local-risk-engine-01
+      capabilities: [analyze.baseline.compare]
+      score: 44
+  enforcers:
+    - node_id: l3l4-xdp-filter-edge-01
+      capabilities: [observe.network.connection, enforce.traffic.rate_limit]
+      score: 84
+fallbacks:
+  - node_id: tcp-proxy-edge-01
+    capabilities: [observe.network.connection]
+    score: 56
+```
+
+---
+
+## Repository layout
 
 ```
-registries/core/    Core Kernloom language (intents, capabilities, signals, ...)
-examples/           Example adapter manifests and policies
-internal/registry/  Registry loader and model
-internal/validator/ Adapter and policy validators
-internal/compiler/  Policy compiler (Phase 2)
-cmd/forge/          CLI entry point
+registries/core/
+  capabilities.yaml        Generic capability vocabulary
+  component_roles.yaml     Functional roles: pep, sensor, analyzer, pdp, pip, controller, sink
+  component_profiles.yaml  Technical profiles: network.l3_l4_filter, network.transport_proxy, …
+  baseline_statistics.yaml Standardised analyzer output fields (upper_bound, confidence, phase, …)
+  selection_traits.yaml    Compiler scoring dimensions (enforcement_position, blast_radius, …)
+  signals.yaml             Standardised signals (network.metric.*, baseline.*, anomaly.*, risk.*)
+  granularities.yaml       Observation/enforcement dimensions (src_ip, tuple_5, listener_id, …)
+  intents.yaml             Abstract policy goals (protection.abuse.mitigate, relation.freeze, …)
+  compiler_rules.yaml      Intent → capability mappings
+
+examples/
+  nodes/                   Example node definitions (l3l4-xdp-filter, tcp-proxy, local-risk-engine)
+  policies/                Example policies including baseline-driven mitigation
+
+internal/
+  registry/                Registry loader and model (ComponentRole, ComponentProfile, …)
+  validator/               Node definition and policy validators
+  compiler/                Policy compiler: CompilePolicy, scoreNode, CompileResult
+
+cmd/forge/                 CLI entry point
 ```
+
+---
+
+## Core model
+
+```
+ComponentRole    = what functional role  (pep / sensor / analyzer / pdp / pip / controller / sink)
+ComponentProfile = how it operates       (network.l3_l4_filter / network.transport_proxy / …)
+NodeDefinition   = concrete declaration  (roles + profiles + capabilities + selection_traits)
+
+Intent           = abstract policy goal  (protection.abuse.mitigate)
+Capability       = technical means       (enforce.traffic.rate_limit)
+Signal           = standardised data     (network.metric.connections_per_second)
+Granularity      = action precision      (src_ip / tuple_5 / listener_id)
+```
+
+Compiler scoring weights (from `selection_traits`):
+
+| Trait | Weight | Better direction |
+|---|---|---|
+| `enforcement_position` | 30 | early > mid > late > control_plane |
+| `runtime_cost` | 20 | very_low > low > medium > high |
+| `source_attribution` | 20 | strong > conditional > weak |
+| `blast_radius` | 10 | packet < flow < listener < node < … |
+| `convergence_speed` | 10 | immediate > fast > eventual |
+
+---
 
 ## Policy language
 
-Policies use [CEL](https://cel.dev) for `when:` conditions and reference standardised Kernloom IDs:
+Policies use [CEL](https://cel.dev) for `when:` conditions. Bindings connect CEL variables
+to live signals and baseline statistics produced by analyzer nodes:
 
 ```yaml
 kind: RuntimePolicy
+apiVersion: forge.kernloom.io/v1alpha2
+
 metadata:
-  id: block-critical-source
+  id: mitigate-src-connection-spike
+
+intent: protection.abuse.mitigate
+
+requirements:
+  required_capabilities:
+    - observe.network.connection
+    - analyze.baseline.compare
+    - enforce.traffic.rate_limit
+  min_granularity: [src_ip]
+  degradation:
+    allow: false
+
 when:
   language: cel
-  expression: signals.anomaly.state.severity == "critical"
+  bindings:
+    current_cps:
+      from: signal
+      id: network.metric.connections_per_second
+      scope: src_ip
+    src_upper:
+      from: baseline
+      signal: network.metric.connections_per_second
+      scope: src_ip
+      statistic: upper_bound
+    src_phase:
+      from: baseline
+      signal: network.metric.connections_per_second
+      scope: src_ip
+      statistic: phase
+  expression: >
+    vars.src_phase == "stable" &&
+    vars.current_cps > vars.src_upper * 1.5
+
 then:
   - type: capability_action
-    capability: enforce.network.deny
+    capability: enforce.traffic.rate_limit
     target:
       granularity: src_ip
       value_from: signals.network.entity.src_ip
-    ttl: 30m
+    parameters:
+      ttl: 10m
 ```
+
+---
 
 ## License
 
-MPL-2.0 — see [LICENSE](LICENSE).
+MPL-2.0 — see [LICENSE](LICENSE) and [LICENSES/MPL-2.0.txt](LICENSES/MPL-2.0.txt).

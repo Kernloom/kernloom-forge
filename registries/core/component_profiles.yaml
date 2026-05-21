@@ -1,0 +1,196 @@
+component_profiles:
+  # Profiles describe WHERE and HOW a component operates technically.
+  # A NodeDefinition declares one or more profiles plus concrete capabilities.
+  # The distinction:
+  #   role    = WHAT functional role (pep, sensor, analyzer …)
+  #   profile = HOW it works technically (L3/L4 filter, TCP proxy, HTTP gateway …)
+
+  # ── Network ──────────────────────────────────────────────────────────────────
+
+  - id: network.l3_l4_filter
+    description: Packet or flow-level filter with L3/L4 visibility. Typical for XDP/eBPF or kernel netfilter.
+    typical_roles: [pep, sensor]
+    layers: [l3, l4]
+    allowed_capability_prefixes:
+      - observe.network
+      - enforce.access
+      - enforce.traffic
+      - enforce.network
+      - export.telemetry
+      - export.event
+    default_constraints:
+      semantic_depth: l3_l4
+      visibility:
+        app:
+          route: unavailable
+          method: unavailable
+          headers: unavailable
+          body: unavailable
+        identity:
+          subject_id: unavailable
+
+  - id: network.transport_proxy
+    description: TCP/UDP proxy with connection-level visibility but no application request semantics.
+    typical_roles: [pep, sensor]
+    layers: [l4]
+    allowed_capability_prefixes:
+      - observe.network
+      - observe.tls
+      - enforce.access
+      - enforce.traffic
+      - enforce.network
+      - route.traffic
+      - export.telemetry
+      - export.event
+    default_constraints:
+      semantic_depth: l4_connection
+      visibility:
+        app:
+          route: unavailable
+          method: unavailable
+          headers: unavailable
+          body: unavailable
+        identity:
+          subject_id: unavailable
+
+  # ── App / HTTP ────────────────────────────────────────────────────────────────
+
+  - id: app.http_gateway
+    description: HTTP reverse proxy, API gateway or ingress with request-level visibility.
+    typical_roles: [pep, sensor]
+    layers: [l7]
+    allowed_capability_prefixes:
+      - observe.app
+      - observe.identity
+      - observe.network
+      - observe.tls
+      - enforce.app
+      - enforce.access
+      - enforce.traffic
+      - route.traffic
+      - export.telemetry
+      - export.event
+    default_constraints:
+      semantic_depth: l7_http
+
+  - id: app.grpc_gateway
+    description: gRPC gateway or proxy with method-level visibility.
+    typical_roles: [pep, sensor]
+    layers: [l7]
+    allowed_capability_prefixes:
+      - observe.app
+      - observe.identity
+      - observe.network
+      - enforce.app
+      - enforce.access
+      - route.traffic
+    default_constraints:
+      semantic_depth: l7_grpc
+
+  # ── Overlay / ZTNA ────────────────────────────────────────────────────────────
+
+  - id: overlay.controller_api
+    description: API adapter for overlay or ZTNA control planes (e.g. OpenZiti, Zscaler).
+    typical_roles: [controller, pep, sensor]
+    layers: [overlay]
+    allowed_capability_prefixes:
+      - observe.overlay
+      - enforce.overlay
+      - route.overlay
+      - export.event
+      - export.telemetry
+    default_constraints:
+      semantic_depth: overlay
+
+  - id: identity.provider_api
+    description: Identity provider or IdP API adapter (e.g. Entra ID, Okta, AWS IAM).
+    typical_roles: [controller, pip]
+    layers: [identity]
+    allowed_capability_prefixes:
+      - observe.identity
+      - enforce.identity
+      - export.event
+    default_constraints:
+      semantic_depth: identity
+
+  # ── Analysis ──────────────────────────────────────────────────────────────────
+
+  - id: analysis.behavior_baseline
+    description: Analyzer that learns and compares expected behaviour for signals over time.
+    typical_roles: [analyzer]
+    allowed_capability_prefixes:
+      - analyze.baseline
+      - analyze.anomaly
+      - analyze.risk
+      - export.telemetry
+
+  - id: analysis.relation_graph
+    description: Analyzer that learns, classifies and freezes communication relations.
+    typical_roles: [analyzer]
+    allowed_capability_prefixes:
+      - analyze.relation
+      - export.telemetry
+
+  - id: analysis.risk_aggregator
+    description: Aggregates signals from multiple sources into a composite risk score.
+    typical_roles: [analyzer, pdp]
+    allowed_capability_prefixes:
+      - analyze.risk
+      - analyze.anomaly
+      - analyze.baseline
+      - export.telemetry
+
+  # ── Decision ──────────────────────────────────────────────────────────────────
+
+  - id: decision.local_pdp
+    description: Local policy decision point that evaluates policy and produces decisions.
+    typical_roles: [pdp]
+    allowed_capability_prefixes:
+      - analyze
+      - export
+      - sink
+
+  - id: decision.global_pdp
+    description: Global policy decision point or correlation engine with multi-node view.
+    typical_roles: [pdp, analyzer, sink]
+    allowed_capability_prefixes:
+      - analyze
+      - export
+      - sink
+
+  # ── Control ───────────────────────────────────────────────────────────────────
+
+  - id: control.local_adapter_manager
+    description: >
+      Locally discovers, validates and controls Plugin Adapters and PEP components.
+      Used by KLIQ as the local orchestrator that manages KLShield, NGINX and other
+      locally attached components via their plugin adapters.
+    typical_roles: [controller]
+    allowed_capability_prefixes:
+      - analyze
+      - export
+      - sink
+
+  # ── Telemetry ─────────────────────────────────────────────────────────────────
+
+  - id: telemetry.sink
+    description: Telemetry, event and audit export sink (e.g. SMTP, webhook, SIEM).
+    typical_roles: [sink]
+    allowed_capability_prefixes:
+      - export
+      - sink
+      - notify
+
+  # ── Host ──────────────────────────────────────────────────────────────────────
+
+  - id: host.agent
+    description: Host-based agent with visibility into processes, workloads and interfaces.
+    typical_roles: [pep, sensor, analyzer]
+    layers: [host]
+    allowed_capability_prefixes:
+      - observe.network
+      - observe.host
+      - enforce.access
+      - enforce.traffic
+      - analyze.baseline
+      - export.telemetry

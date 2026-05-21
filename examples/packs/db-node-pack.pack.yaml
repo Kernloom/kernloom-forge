@@ -1,0 +1,166 @@
+apiVersion: kernloom.io/kliq/v1alpha1
+kind: LocalPolicyPack
+metadata:
+    name: db-node-pack
+    description: 'Policies: dos-prevention, mitigate-src-connection-spike, syn-flood-protection, quarantine-sustained-anomaly, block-confirmed-attacker'
+    labels:
+        forge.pack_type: multi
+        forge.policies: dos-prevention,mitigate-src-connection-spike,syn-flood-protection,quarantine-sustained-anomaly,block-confirmed-attacker
+        forge.policy_count: "5"
+    issued_at: "2026-05-18T18:50:45Z"
+spec:
+    capabilities_required:
+        - enforce.access.deny
+        - enforce.traffic.rate_limit
+        - enforce.traffic.tarpit
+    action_authorization:
+        allowed_capabilities:
+            - enforce.access.deny
+            - enforce.traffic.rate_limit
+            - enforce.traffic.tarpit
+        default_effect: deny
+    rules:
+        - name: forge-dos-prevention-rule0-enforce-traffic-rate-limit
+          when:
+            language: cel
+            bindings:
+                current_pps:
+                    from: signal
+                    id: network.metric.packets_per_second
+                    scope: src_ip
+                global_upper:
+                    from: baseline
+                    signal: network.metric.packets_per_second
+                    scope: global
+                    statistic: upper_bound
+                src_confidence:
+                    from: baseline
+                    signal: network.metric.packets_per_second
+                    scope: src_ip
+                    statistic: confidence
+                src_upper:
+                    from: baseline
+                    signal: network.metric.packets_per_second
+                    scope: src_ip
+                    statistic: upper_bound
+            expression: |
+                (vars.src_confidence >= 0.5 && vars.current_pps > vars.src_upper * 1.5) || (vars.src_confidence < 0.5 && vars.current_pps > vars.global_upper * 2.0)
+          then:
+            capability: enforce.traffic.rate_limit
+            ttl: 10m
+        - name: forge-mitigate-src-connection-spike-rule0-enforce-traffic-rate-limit
+          when:
+            language: cel
+            bindings:
+                current_cps:
+                    from: signal
+                    id: network.metric.connections_per_second
+                    scope: src_ip
+                global_upper:
+                    from: baseline
+                    signal: network.metric.connections_per_second
+                    scope: global
+                    statistic: upper_bound
+                src_confidence:
+                    from: baseline
+                    signal: network.metric.connections_per_second
+                    scope: src_ip
+                    statistic: confidence
+                src_phase:
+                    from: baseline
+                    signal: network.metric.connections_per_second
+                    scope: src_ip
+                    statistic: phase
+                src_upper:
+                    from: baseline
+                    signal: network.metric.connections_per_second
+                    scope: src_ip
+                    statistic: upper_bound
+            expression: |
+                vars.src_phase == "stable" && vars.src_confidence >= 0.7 && vars.current_cps > vars.src_upper * 1.5
+          then:
+            capability: enforce.traffic.rate_limit
+            ttl: 10m
+        - name: forge-mitigate-src-connection-spike-rule1-enforce-traffic-rate-limit
+          when:
+            language: cel
+            bindings:
+                current_cps:
+                    from: signal
+                    id: network.metric.connections_per_second
+                    scope: src_ip
+                global_upper:
+                    from: baseline
+                    signal: network.metric.connections_per_second
+                    scope: global
+                    statistic: upper_bound
+                src_confidence:
+                    from: baseline
+                    signal: network.metric.connections_per_second
+                    scope: src_ip
+                    statistic: confidence
+                src_phase:
+                    from: baseline
+                    signal: network.metric.connections_per_second
+                    scope: src_ip
+                    statistic: phase
+                src_upper:
+                    from: baseline
+                    signal: network.metric.connections_per_second
+                    scope: src_ip
+                    statistic: upper_bound
+            expression: |
+                vars.src_confidence < 0.7 && vars.current_cps > vars.global_upper * 1.5
+          then:
+            capability: enforce.traffic.rate_limit
+            ttl: 10m
+        - name: forge-syn-flood-protection-rule0-enforce-traffic-rate-limit
+          when:
+            language: cel
+            bindings:
+                syn_rate:
+                    from: signal
+                    id: network.metric.syn_per_second
+                    scope: src_ip
+            expression: vars.syn_rate > 500.0
+          then:
+            capability: enforce.traffic.rate_limit
+            ttl: 15m
+            params:
+                rate_pps: "10"
+        - name: forge-quarantine-sustained-anomaly-rule0-enforce-traffic-tarpit
+          when:
+            language: cel
+            bindings:
+                anomaly_confidence:
+                    from: signal
+                    id: anomaly.confidence
+                    scope: src_ip
+                anomaly_score:
+                    from: signal
+                    id: anomaly.score
+                    scope: src_ip
+            expression: |
+                vars.anomaly_score > 0.7 && vars.anomaly_confidence >= 0.6 && vars.anomaly_score <= 0.9
+          then:
+            capability: enforce.traffic.tarpit
+            ttl: 30m
+            params:
+                rate_pps: "2"
+        - name: forge-block-confirmed-attacker-rule0-enforce-access-deny
+          when:
+            language: cel
+            bindings:
+                anomaly_confidence:
+                    from: signal
+                    id: anomaly.confidence
+                    scope: src_ip
+                anomaly_score:
+                    from: signal
+                    id: anomaly.score
+                    scope: src_ip
+            expression: |
+                vars.anomaly_score > 0.9 && vars.anomaly_confidence >= 0.8
+          then:
+            capability: enforce.access.deny
+            ttl: 2h

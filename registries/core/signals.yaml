@@ -36,7 +36,7 @@ signals:
     domain: network
     type: metric
     unit: pps
-    allowed_scopes: [global, interface, src_ip, dst_ip, tuple_5]
+    allowed_scopes: [global, interface, interface_id, src_ip, dst_ip, tuple_5]
     allowed_producers: [pep, sensor]
     aggregation: [sum, max, avg]
 
@@ -44,7 +44,7 @@ signals:
     domain: network
     type: metric
     unit: bps
-    allowed_scopes: [global, interface, src_ip, dst_ip, tuple_5]
+    allowed_scopes: [global, interface, interface_id, src_ip, dst_ip, tuple_5]
     allowed_producers: [pep, sensor]
     aggregation: [sum, max, avg]
 
@@ -52,7 +52,7 @@ signals:
     domain: network
     type: metric
     unit: pps
-    allowed_scopes: [global, interface, src_ip, tuple_5]
+    allowed_scopes: [global, interface, interface_id, src_ip, tuple_5]
     allowed_producers: [pep, sensor]
     aggregation: [sum, max]
 
@@ -60,20 +60,115 @@ signals:
     domain: network
     type: metric
     unit: count
-    allowed_scopes: [global, interface, src_ip, tuple_5]
+    allowed_scopes: [global, interface, interface_id, src_ip, tuple_5]
     allowed_producers: [pep, sensor]
     aggregation: [sum]
+
+  - id: network.metric.connections_per_second
+    domain: network
+    type: metric
+    unit: cps
+    allowed_scopes: [global, listener_id, src_ip, dst_ip, tuple_5]
+    allowed_producers: [pep, sensor]
+    aggregation: [sum, max, avg]
 
   - id: network.metric.rate_limit_hit_count
     domain: network
     type: metric
     unit: count
-    allowed_scopes: [global, interface, src_ip, tuple_5]
+    allowed_scopes: [global, interface, interface_id, src_ip, tuple_5]
     allowed_producers: [pep]
     aggregation: [sum]
 
+  # ── TLS ───────────────────────────────────────────────────────────────────────
+
+  - id: tls.sni
+    domain: tls
+    type: entity
+    unit: string
+    allowed_scopes: [global, src_ip, tuple_5, connection_id]
+    allowed_producers: [pep, sensor]
+
+  - id: tls.alpn
+    domain: tls
+    type: entity
+    unit: string
+    allowed_scopes: [global, src_ip, tuple_5, connection_id]
+    allowed_producers: [pep, sensor]
+
+  # ── Baseline ──────────────────────────────────────────────────────────────────
+
+  - id: baseline.expected
+    domain: baseline
+    type: metric_reference
+    unit: inherited
+    allowed_scopes: [global, src_ip, tuple_5, service_id, relation_id]
+    allowed_producers: [analyzer, pdp]
+
+  - id: baseline.upper_bound
+    domain: baseline
+    type: metric_reference
+    unit: inherited
+    allowed_scopes: [global, src_ip, tuple_5, service_id, relation_id]
+    allowed_producers: [analyzer, pdp]
+
+  - id: baseline.lower_bound
+    domain: baseline
+    type: metric_reference
+    unit: inherited
+    allowed_scopes: [global, src_ip, tuple_5, service_id, relation_id]
+    allowed_producers: [analyzer, pdp]
+
+  - id: baseline.deviation_ratio
+    domain: baseline
+    type: score
+    unit: ratio
+    allowed_scopes: [global, src_ip, tuple_5, service_id, relation_id]
+    allowed_producers: [analyzer, pdp]
+
+  - id: baseline.confidence
+    domain: baseline
+    type: score
+    unit: score
+    range: [0, 1]
+    allowed_scopes: [global, src_ip, tuple_5, service_id, relation_id]
+    allowed_producers: [analyzer, pdp]
+
+  - id: baseline.phase
+    domain: baseline
+    type: state
+    unit: enum
+    allowed_values: [missing, learning, warmup, stable, stale]
+    allowed_scopes: [global, src_ip, tuple_5, service_id, relation_id]
+    allowed_producers: [analyzer, pdp]
+
   # ── Anomaly ───────────────────────────────────────────────────────────────────
 
+  - id: anomaly.score
+    domain: anomaly
+    type: score
+    unit: score
+    range: [0, 1]
+    allowed_scopes: [global, src_ip, node_id, tuple_5, relation_id]
+    allowed_producers: [pdp, analyzer]
+
+  - id: anomaly.severity
+    domain: anomaly
+    type: state
+    unit: enum
+    allowed_values: [info, low, medium, high, critical]
+    allowed_scopes: [global, src_ip, node_id, tuple_5, relation_id]
+    allowed_producers: [pdp, analyzer]
+
+  - id: anomaly.confidence
+    domain: anomaly
+    type: score
+    unit: score
+    range: [0, 1]
+    allowed_scopes: [global, src_ip, node_id, tuple_5, relation_id]
+    allowed_producers: [pdp, analyzer]
+
+  # Legacy anomaly signals — prefer anomaly.score / anomaly.severity / anomaly.confidence.
   - id: anomaly.score.combined
     domain: anomaly
     type: score
@@ -104,34 +199,59 @@ signals:
     domain: relation
     type: state
     unit: boolean
-    allowed_scopes: [relation]
-    allowed_producers: [graph_engine, analyzer, pdp]
+    allowed_scopes: [relation, relation_id]
+    allowed_producers: [analyzer, pdp]
 
   - id: relation.state.approved
     domain: relation
     type: state
     unit: boolean
-    allowed_scopes: [relation]
-    allowed_producers: [graph_engine, analyzer, pdp]
+    allowed_scopes: [relation, relation_id]
+    allowed_producers: [analyzer, pdp]
 
   - id: relation.state.confidence
     domain: relation
     type: score
     unit: score
     range: [0, 1]
-    allowed_scopes: [relation]
-    allowed_producers: [graph_engine, analyzer]
+    allowed_scopes: [relation, relation_id]
+    allowed_producers: [analyzer]
 
   - id: relation.state.lifecycle
     domain: relation
     type: state
     unit: enum
     allowed_values: [candidate, learned, approved, frozen, denied, expired]
-    allowed_scopes: [relation]
-    allowed_producers: [graph_engine, analyzer]
+    allowed_scopes: [relation, relation_id]
+    allowed_producers: [analyzer]
 
   # ── Risk ──────────────────────────────────────────────────────────────────────
 
+  - id: risk.score
+    domain: risk
+    type: score
+    unit: score
+    range: [0, 100]
+    allowed_scopes: [global, src_ip, node_id, relation, relation_id, service_id]
+    allowed_producers: [pdp, analyzer]
+
+  - id: risk.level
+    domain: risk
+    type: state
+    unit: enum
+    allowed_values: [none, low, medium, high, critical]
+    allowed_scopes: [global, src_ip, node_id, relation, relation_id, service_id]
+    allowed_producers: [pdp, analyzer]
+
+  - id: risk.confidence
+    domain: risk
+    type: score
+    unit: score
+    range: [0, 1]
+    allowed_scopes: [global, src_ip, node_id, relation, relation_id, service_id]
+    allowed_producers: [pdp, analyzer]
+
+  # Legacy — prefer risk.score.
   - id: risk.local.score
     domain: risk
     type: score
@@ -149,3 +269,61 @@ signals:
     allowed_values: [none, log, allow, deny, rate_limit, quarantine, default_deny]
     allowed_scopes: [global, src_ip, tuple_5, relation]
     allowed_producers: [pdp, pep]
+
+  # ── Config (Assessment) ───────────────────────────────────────────────────────
+  # Config signals describe the outcome of an asset assessment, not the
+  # asset's internal fields. Forge does not register Kubernetes-specific,
+  # KLIQ-specific, or any other platform-specific signals here.
+  # Platform-specific fields are accessed directly via CEL ("document.spec.foo")
+  # and belong in Policy Libraries, not in the Core Registry.
+
+  - id: config.asset.type
+    domain: config
+    type: entity
+    unit: string
+    allowed_scopes: [global]
+    allowed_producers: [assessor]
+
+  - id: config.asset.schema_id
+    domain: config
+    type: entity
+    unit: string
+    allowed_scopes: [global]
+    allowed_producers: [assessor]
+
+  - id: config.asset.hash
+    domain: config
+    type: entity
+    unit: string
+    allowed_scopes: [global]
+    allowed_producers: [assessor]
+
+  - id: config.asset.valid
+    domain: config
+    type: state
+    unit: boolean
+    allowed_scopes: [global]
+    allowed_producers: [assessor]
+
+  - id: config.assessment.result
+    domain: config
+    type: state
+    unit: enum
+    allowed_values: [pass, warn, fail, error]
+    allowed_scopes: [global]
+    allowed_producers: [assessor]
+
+  - id: config.assessment.violation_count
+    domain: config
+    type: metric
+    unit: count
+    allowed_scopes: [global]
+    allowed_producers: [assessor]
+
+  - id: config.assessment.max_severity
+    domain: config
+    type: state
+    unit: enum
+    allowed_values: [none, info, low, medium, high, critical]
+    allowed_scopes: [global]
+    allowed_producers: [assessor]

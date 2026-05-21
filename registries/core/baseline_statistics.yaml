@@ -1,0 +1,54 @@
+baseline_statistics:
+  # Forge standardises WHAT a baseline produces. HOW it is computed (Median+MAD,
+  # EWMA, percentiles, static threshold) is the adapter's internal concern.
+  # CEL expressions and policy bindings only reference these standard names.
+
+  - id: expected
+    description: Expected (central) value for the signal in the given scope.
+    value_type: number
+    unit: inherited_from_signal
+
+  - id: lower_bound
+    description: Lower acceptable bound for the signal.
+    value_type: number
+    unit: inherited_from_signal
+
+  - id: upper_bound
+    description: Upper acceptable bound for the signal.
+    value_type: number
+    unit: inherited_from_signal
+
+  - id: deviation_ratio
+    description: Current value divided by the expected or bound value (dimensionless ratio).
+    value_type: number
+
+  - id: confidence
+    description: Model confidence for this scope. 0 = no data; 1 = fully learned.
+    value_type: number
+    range: [0, 1]
+
+  - id: phase
+    description: Lifecycle phase of the baseline model for this scope.
+    value_type: enum
+    allowed_values:
+      - missing    # no data at all
+      - learning   # collecting initial samples
+      - warmup     # enough samples, model stabilising
+      - stable     # model is trusted
+      - stale      # model has not been updated recently
+
+  - id: sample_count
+    description: Number of samples used to build this baseline.
+    value_type: integer
+
+  - id: window_seconds
+    description: Time window (in seconds) represented by the baseline.
+    value_type: integer
+
+  - id: model_id
+    description: Identifier of the model or algorithm that produced this baseline.
+    value_type: string
+
+  - id: model_version
+    description: Version of the model or algorithm that produced this baseline.
+    value_type: string

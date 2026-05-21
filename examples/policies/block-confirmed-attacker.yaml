@@ -1,0 +1,50 @@
+kind: Policy
+apiVersion: forge.kernloom.io/v1alpha2
+
+metadata:
+  id: block-confirmed-attacker
+  name: Block confirmed attacker
+  description: >
+    Block a source with critically high anomaly score AND high confidence.
+    Requires both to prevent false positives during baseline learning.
+
+spec:
+  context: runtime
+  intent: protection.source.quarantine
+
+  requirements:
+    capabilities:
+      - observe.network.packet_summary
+      - enforce.access.deny
+    min_granularity:
+      - src_ip
+    degradation:
+      allow: false
+
+  inputs:
+    bindings:
+      anomaly_score:
+        from: signal
+        id: anomaly.score
+        scope: src_ip
+      anomaly_confidence:
+        from: signal
+        id: anomaly.confidence
+        scope: src_ip
+
+  rules:
+    - id: block-critical-anomaly
+      when:
+        language: cel
+        expression: >
+          vars.anomaly_score > 0.9 &&
+          vars.anomaly_confidence >= 0.8
+      effects:
+        - type: action
+          action: enforce.access.deny
+          target:
+            granularity: src_ip
+            value_from: signals.network.entity.src_ip
+          constraints:
+            ttl: 2h
+          reason: critical_anomaly_score_with_high_confidence

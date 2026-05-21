@@ -1,31 +1,179 @@
 granularities:
+  # ── Core / Tenancy ───────────────────────────────────────────────────────────
   - id: global
-  - id: interface
+    group: core
+  - id: tenant_id
+    group: core
+  - id: environment_id
+    group: core
+  - id: zone_id
+    group: core
+  - id: region_id
+    group: core
+
+  # ── Network ──────────────────────────────────────────────────────────────────
   - id: direction
+    group: network
   - id: src_ip
+    group: network
   - id: dst_ip
+    group: network
   - id: src_cidr
+    group: network
   - id: dst_cidr
+    group: network
   - id: src_port
+    group: network
   - id: dst_port
+    group: network
   - id: protocol
+    group: network
   - id: tcp_flags
+    group: network
   - id: tuple_3
+    group: network
   - id: tuple_5
-  - id: node_id
-  - id: service_id
-  - id: identity_id
-  - id: subject_id
-  - id: workload_id
-  - id: host
-  - id: path
-  - id: method
-  - id: route
-  - id: claim
-  - id: role
-  - id: group
-  - id: overlay_service
-  - id: overlay_identity
+    group: network
+  - id: flow_id
+    group: network
+  - id: connection_id
+    group: network
+
+  # Kept for backward compatibility with existing capabilities; prefer interface_id.
+  - id: interface
+    group: asset
+
+  # ── Asset / Host ─────────────────────────────────────────────────────────────
+  - id: interface_id
+    group: asset
   - id: asset_id
+    group: asset
+  - id: node_id
+    group: asset
+  - id: host_id
+    group: asset
+  - id: workload_id
+    group: asset
+  - id: process_id
+    group: asset
+  - id: container_id
+    group: asset
+  - id: namespace_id
+    group: asset
+  - id: cluster_id
+    group: asset
   - id: config_item
+    group: asset
+
+  # ── Service / Routing ────────────────────────────────────────────────────────
+  - id: listener_id
+    group: service
+  - id: upstream_id
+    group: service
+  - id: service_id
+    group: service
+  - id: service_instance_id
+    group: service
+  - id: relation_id
+    group: service
+
+  # Kept for backward compatibility; prefer relation_id.
   - id: relation
+    group: service
+
+  # ── Identity ─────────────────────────────────────────────────────────────────
+  - id: subject_id
+    group: identity
+  - id: user_id
+    group: identity
+  - id: service_account_id
+    group: identity
+  - id: machine_identity_id
+    group: identity
+  - id: group_id
+    group: identity
+  - id: role_id
+    group: identity
+  - id: claim_key
+    group: identity
+  - id: claim_value
+    group: identity
+
+  # Kept for backward compatibility; prefer subject_id or machine_identity_id.
+  - id: identity_id
+    group: identity
+  # Kept for backward compatibility; prefer claim_key / claim_value.
+  - id: claim
+    group: identity
+  # Kept for backward compatibility; prefer role_id.
+  - id: role
+    group: identity
+  # Kept for backward compatibility; prefer group_id.
+  - id: group
+    group: identity
+
+  # ── Overlay / ZTNA ──────────────────────────────────────────────────────────
+  - id: overlay_identity_id
+    group: overlay
+  - id: overlay_service_id
+    group: overlay
+  - id: overlay_session_id
+    group: overlay
+  - id: overlay_router_id
+    group: overlay
+  - id: overlay_policy_id
+    group: overlay
+
+  # Kept for backward compatibility; prefer overlay_identity_id / overlay_service_id.
+  - id: overlay_identity
+    group: overlay
+  - id: overlay_service
+    group: overlay
+
+  # ── App / HTTP ───────────────────────────────────────────────────────────────
+  - id: host
+    group: app
+  - id: path
+    group: app
+  - id: route
+    group: app
+  - id: method
+    group: app
+  - id: header_name
+    group: app
+  - id: header_value
+    group: app
+  - id: cookie_name
+    group: app
+  - id: api_operation_id
+    group: app
+
+  # ── TLS / mTLS ───────────────────────────────────────────────────────────────
+  - id: tls_sni
+    group: tls
+  - id: tls_alpn
+    group: tls
+  - id: mtls_subject
+    group: tls
+  - id: mtls_san
+    group: tls
+  - id: certificate_fingerprint
+    group: tls
+
+  # ── Trust / Attestation ──────────────────────────────────────────────────────
+  - id: trust_profile_id
+    group: trust
+  - id: attestation_policy_id
+    group: trust
+  - id: measurement_profile_id
+    group: trust
+
+  # ── Data / DLP ───────────────────────────────────────────────────────────────
+  - id: data_object_id
+    group: data
+  - id: data_classification
+    group: data
+  - id: data_owner
+    group: data
+  - id: data_action
+    group: data

@@ -1,21 +1,53 @@
-kind: RuntimePolicy
-apiVersion: forge.kernloom.io/v1alpha1
+kind: Policy
+apiVersion: forge.kernloom.io/v1alpha2
 
 metadata:
   id: quarantine-sustained-anomaly
-  description: Quarantine a source with sustained high anomaly score via intent.
+  name: Quarantine sustained anomaly
+  description: >
+    Hard rate-limit a source with sustained high anomaly score (0.7–0.9).
+    Combines with block-confirmed-attacker: this fires at 0.7, block at 0.9.
 
-when:
-  language: cel
-  expression: >
-    signals.anomaly.score.combined > 0.85 &&
-    signals.anomaly.state.sustained_seconds > 30
+spec:
+  context: runtime
+  intent: protection.source.quarantine
 
-then:
-  - type: intent_action
-    intent: protection.source.quarantine
-    target:
-      source:
-        value_from: signals.network.entity.src_ip
-    ttl: 15m
-    reason: sustained_anomaly
+  requirements:
+    capabilities:
+      - observe.network.packet_summary
+      - enforce.traffic.tarpit
+    min_granularity:
+      - src_ip
+    degradation:
+      allow: false
+
+  inputs:
+    bindings:
+      anomaly_score:
+        from: signal
+        id: anomaly.score
+        scope: src_ip
+      anomaly_confidence:
+        from: signal
+        id: anomaly.confidence
+        scope: src_ip
+
+  rules:
+    - id: tarpit-moderate-anomaly
+      when:
+        language: cel
+        expression: >
+          vars.anomaly_score > 0.7 &&
+          vars.anomaly_confidence >= 0.6 &&
+          vars.anomaly_score <= 0.9
+      effects:
+        - type: action
+          action: enforce.traffic.tarpit
+          target:
+            granularity: src_ip
+            value_from: signals.network.entity.src_ip
+          parameters:
+            rate_pps: 2
+          constraints:
+            ttl: 30m
+          reason: sustained_anomaly_below_block_threshold

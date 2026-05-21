@@ -1,5 +1,49 @@
-dist/
+# Binaries
 bin/
+dist/
 *.exe
 *.test
 *.out
+
+# Build artifacts
+/forge
+
+# Go test cache and coverage
+coverage.out
+coverage.html
+*.coverprofile
+
+# Go workspace files
+go.work
+go.work.sum
+
+# Vendor directory (not used, dependencies via go modules)
+vendor/
+
+# SQLite databases (operational state, not desired state)
+*.db
+*.sqlite
+*.sqlite3
+
+# Pack outputs and signing artefacts (generated, not committed)
+*.signed.yaml
+*.sig
+# Exception: curated example packs in examples/packs/ are committed as documentation
+dist/*.pack.yaml
+
+# Editor and OS artifacts
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+*.iml
+
+# Claude AI working files (not part of the codebase)
+.claude/*
+.claude/CLAUDE.md
+
+# Local documentation drafts (not committed — use docs/ for committed docs)
+_docs/

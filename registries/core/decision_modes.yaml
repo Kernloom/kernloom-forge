@@ -1,0 +1,38 @@
+decision_modes:
+  # Decision modes define how the local PDP (KLIQ) interacts with the
+  # central policy authority (Forge) when evaluating and enforcing policies.
+  #
+  # Used in PolicyAssignment.delegation.decision_mode.
+  #
+  # The mode is a capability declaration, not a runtime protocol —
+  # it tells the local PDP how much autonomy it has and what to do
+  # when the central authority is unreachable.
+
+  - id: local_evaluation
+    description: >
+      The local PDP evaluates policies and makes enforcement decisions
+      autonomously using its own signal engine, baseline model and
+      action resolver. Forge distributes policies and monitors drift
+      but does not participate in individual decisions.
+      This is the standard mode for KLIQ.
+
+  - id: advisory
+    description: >
+      The local PDP evaluates and enforces, but also produces
+      recommendations that are forwarded to Forge or an operator for
+      review. Enforcement happens immediately; the recommendation is
+      informational. Useful when adding a new policy to an existing
+      environment — watch what would be enforced before committing.
+
+  - id: observe_only
+    description: >
+      The local PDP evaluates policies and generates signals and findings
+      but does not execute enforcement actions. Equivalent to having
+      no enforce.* capabilities in the ceiling. Used for baselining,
+      auditing or dry-run rollouts.
+
+  - id: central_evaluation
+    description: >
+      Reserved for future use. Enforcement decisions are made by a central
+      authority (Forge or Correlate) and pushed to the node. The local
+      PDP only executes what it is told. Not implemented in KLIQ today.
