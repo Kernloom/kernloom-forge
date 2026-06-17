@@ -70,6 +70,10 @@ type RequirementEnforcement struct {
 	// ID is the requirement identifier from the AccessPolicy condition.
 	ID string `yaml:"id"`
 
+	// RequirementKind is the canonical requirement kind (e.g. "risk_level").
+	// Matches the Kind constants in pkg/core/requirement.
+	RequirementKind string `yaml:"requirementKind,omitempty"`
+
 	// Requirement is the CEL expression of the condition.
 	Requirement string `yaml:"requirement,omitempty"`
 
