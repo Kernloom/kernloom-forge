@@ -90,10 +90,10 @@ func testEnforcementPlan() *plan.EnforcementPlan {
 						DecisionOwner: "kernloom-runtime-pdp",
 					},
 					Ownership: &plan.RequirementOwnership{
-						RiskAssessmentOwner:     "kernloom-risk-engine",
-						EnterpriseDecisionOwner: "kernloom-runtime-pdp",
+						RiskAssessmentOwner:      "kernloom-risk-engine",
+						EnterpriseDecisionOwner:  "kernloom-runtime-pdp",
 						TargetAuthorizationOwner: "openziti-controller",
-						EnforcementOwner:        "openziti-edge-router",
+						EnforcementOwner:         "openziti-edge-router",
 					},
 				},
 				{

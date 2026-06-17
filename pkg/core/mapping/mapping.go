@@ -14,8 +14,9 @@
 //   - unsupported       — no available mapping; requirement cannot be satisfied
 //
 // The distinction between delegated and compensating_control is critical:
-//   delegated = vendor evaluates a semantically equivalent condition itself
-//   compensating_control = vendor has no equivalent; Kernloom acts as a side channel
+//
+//	delegated = vendor evaluates a semantically equivalent condition itself
+//	compensating_control = vendor has no equivalent; Kernloom acts as a side channel
 package mapping
 
 import (
@@ -29,11 +30,11 @@ import (
 type SupportLevel string
 
 const (
-	SupportFull               SupportLevel = "full"
-	SupportPartial            SupportLevel = "partial"
-	SupportDelegated          SupportLevel = "delegated"
+	SupportFull                SupportLevel = "full"
+	SupportPartial             SupportLevel = "partial"
+	SupportDelegated           SupportLevel = "delegated"
 	SupportCompensatingControl SupportLevel = "compensating_control"
-	SupportUnsupported        SupportLevel = "unsupported"
+	SupportUnsupported         SupportLevel = "unsupported"
 )
 
 // FidelityLevel describes the semantic precision of the mapping.

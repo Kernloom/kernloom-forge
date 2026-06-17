@@ -36,7 +36,7 @@ const (
 	RoleVendorPAP        TargetRole = "vendor_pap"         // manages its own config
 	RoleVendorRuntimePDP TargetRole = "vendor_runtime_pdp" // makes runtime decisions
 	RoleVendorPEP        TargetRole = "vendor_pep"         // enforces access
-	RolePIPRead          TargetRole = "pip_read"            // supplies signals/telemetry
+	RolePIPRead          TargetRole = "pip_read"           // supplies signals/telemetry
 	RoleKernloomPEP      TargetRole = "kernloom_pep"       // pure enforcement, no policy logic
 )
 

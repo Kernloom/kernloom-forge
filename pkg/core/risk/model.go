@@ -42,10 +42,10 @@ import (
 //	      high:     [60, 79]
 //	      critical: [80, 100]
 type RiskModel struct {
-	APIVersion string          `yaml:"apiVersion"`
-	Kind       string          `yaml:"kind"`
-	Metadata   RiskModelMeta   `yaml:"metadata"`
-	Spec       RiskModelSpec   `yaml:"spec"`
+	APIVersion string        `yaml:"apiVersion"`
+	Kind       string        `yaml:"kind"`
+	Metadata   RiskModelMeta `yaml:"metadata"`
+	Spec       RiskModelSpec `yaml:"spec"`
 }
 
 // RiskModelMeta identifies the risk model.
@@ -132,8 +132,8 @@ type DecayConfig struct {
 
 // RiskModelOutput defines the numeric range and level thresholds.
 type RiskModelOutput struct {
-	Range  ScoreRange            `yaml:"range"`
-	Levels map[string][2]int     `yaml:"levels"` // e.g. "high": [60, 79]
+	Range  ScoreRange        `yaml:"range"`
+	Levels map[string][2]int `yaml:"levels"` // e.g. "high": [60, 79]
 }
 
 // ScoreRange defines valid score boundaries.
@@ -159,10 +159,10 @@ type RiskModelValidity struct {
 //
 // This is Forge's declaration; KLIQ applies it within the permitted local risk mode.
 type RiskCombinationProfile struct {
-	APIVersion string                    `yaml:"apiVersion"`
-	Kind       string                    `yaml:"kind"`
-	Metadata   CombinationProfileMeta    `yaml:"metadata"`
-	Spec       CombinationProfileSpec    `yaml:"spec"`
+	APIVersion string                 `yaml:"apiVersion"`
+	Kind       string                 `yaml:"kind"`
+	Metadata   CombinationProfileMeta `yaml:"metadata"`
+	Spec       CombinationProfileSpec `yaml:"spec"`
 }
 
 // CombinationProfileMeta identifies the combination profile.

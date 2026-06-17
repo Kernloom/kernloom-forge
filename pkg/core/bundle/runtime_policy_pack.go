@@ -49,10 +49,10 @@ import "time"
 //	      missingContextBehavior: observe_only
 //	      reasonCode: ENTERPRISE_RISK_HIGH
 type RuntimePolicyPack struct {
-	APIVersion string             `yaml:"apiVersion" json:"apiVersion"`
-	Kind       string             `yaml:"kind"       json:"kind"`
-	Metadata   PackMeta           `yaml:"metadata"   json:"metadata"`
-	Spec       RuntimePackSpec    `yaml:"spec"       json:"spec"`
+	APIVersion string          `yaml:"apiVersion" json:"apiVersion"`
+	Kind       string          `yaml:"kind"       json:"kind"`
+	Metadata   PackMeta        `yaml:"metadata"   json:"metadata"`
+	Spec       RuntimePackSpec `yaml:"spec"       json:"spec"`
 }
 
 // PackMeta identifies the policy pack.
@@ -113,7 +113,7 @@ type PolicyScope struct {
 //	device.posture   — string: "healthy", "degraded", "unhealthy", "unknown"
 //	session.auth_strength — string
 type PolicyWhen struct {
-	Language   string `yaml:"language"   json:"language"`   // "cel"
+	Language   string `yaml:"language"   json:"language"` // "cel"
 	Expression string `yaml:"expression" json:"expression"`
 }
 
@@ -138,10 +138,10 @@ type PolicyEffect struct {
 // It bounds the local decision authority so that KLIQ cannot exceed what
 // the enterprise policy intends.
 type RuntimePDPProfile struct {
-	APIVersion string          `yaml:"apiVersion" json:"apiVersion"`
-	Kind       string          `yaml:"kind"       json:"kind"`
-	Metadata   ProfileMeta     `yaml:"metadata"   json:"metadata"`
-	Spec       PDPProfileSpec  `yaml:"spec"       json:"spec"`
+	APIVersion string         `yaml:"apiVersion" json:"apiVersion"`
+	Kind       string         `yaml:"kind"       json:"kind"`
+	Metadata   ProfileMeta    `yaml:"metadata"   json:"metadata"`
+	Spec       PDPProfileSpec `yaml:"spec"       json:"spec"`
 }
 
 // ProfileMeta identifies the PDP profile.

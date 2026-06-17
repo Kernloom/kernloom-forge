@@ -228,9 +228,9 @@ type IndicatorSpec struct {
 // RiskContribution is a model-specific input to a RiskAssessment.
 // Each model rule produces one contribution when its conditions are met.
 type RiskContribution struct {
-	APIVersion string              `yaml:"apiVersion" json:"apiVersion"`
-	Kind       string              `yaml:"kind"       json:"kind"`
-	Spec       ContributionSpec    `yaml:"spec"       json:"spec"`
+	APIVersion string           `yaml:"apiVersion" json:"apiVersion"`
+	Kind       string           `yaml:"kind"       json:"kind"`
+	Spec       ContributionSpec `yaml:"spec"       json:"spec"`
 }
 
 // ContributionSpec is the normative body of a RiskContribution.

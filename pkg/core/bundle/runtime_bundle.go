@@ -24,10 +24,10 @@ import (
 //  8. Preserve previous bundle as last-known-good
 //  9. Acknowledge activation result to Forge
 type RuntimeBundle struct {
-	APIVersion string        `yaml:"apiVersion" json:"apiVersion"`
-	Kind       string        `yaml:"kind"       json:"kind"`
-	Metadata   BundleMeta    `yaml:"metadata"   json:"metadata"`
-	Spec       BundleSpec    `yaml:"spec"       json:"spec"`
+	APIVersion string     `yaml:"apiVersion" json:"apiVersion"`
+	Kind       string     `yaml:"kind"       json:"kind"`
+	Metadata   BundleMeta `yaml:"metadata"   json:"metadata"`
+	Spec       BundleSpec `yaml:"spec"       json:"spec"`
 	// Signature is the Ed25519 signature over the canonical BundleSpec JSON.
 	// Populated by Sign(); verified by KLIQ before activation.
 	Signature string `yaml:"signature,omitempty" json:"signature,omitempty"`

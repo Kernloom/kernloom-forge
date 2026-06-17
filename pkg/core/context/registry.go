@@ -17,10 +17,10 @@ import (
 // Lives in: registries/context/canonical-keys.yaml
 // Versioned in Git; version is embedded in compiled RuntimeBundles and ContextSnapshots.
 type ContextKeyRegistry struct {
-	APIVersion string          `yaml:"apiVersion"`
-	Kind       string          `yaml:"kind"`
-	Metadata   RegistryMeta    `yaml:"metadata"`
-	Spec       RegistrySpec    `yaml:"spec"`
+	APIVersion string       `yaml:"apiVersion"`
+	Kind       string       `yaml:"kind"`
+	Metadata   RegistryMeta `yaml:"metadata"`
+	Spec       RegistrySpec `yaml:"spec"`
 }
 
 // RegistryMeta identifies the registry document.

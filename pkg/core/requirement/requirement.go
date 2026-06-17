@@ -20,14 +20,14 @@ import (
 // Kind constants identify the category of a requirement so capability matchers
 // can quickly filter without inspecting signal paths.
 const (
-	KindSubjectIdentity = "subject_identity" // who the subject is (role, group)
+	KindSubjectIdentity  = "subject_identity"  // who the subject is (role, group)
 	KindResourceIdentity = "resource_identity" // what resource is targeted
-	KindAuthStrength    = "auth_strength"    // authentication assurance level
-	KindRiskLevel       = "risk_level"       // risk score / level
-	KindDevicePosture   = "device_posture"   // device compliance / health
-	KindSessionContext  = "session_context"  // session-scoped signals
-	KindNetworkTuple    = "network_tuple"    // IP/port/protocol conditions
-	KindCustom          = "custom"           // any other condition type
+	KindAuthStrength     = "auth_strength"     // authentication assurance level
+	KindRiskLevel        = "risk_level"        // risk score / level
+	KindDevicePosture    = "device_posture"    // device compliance / health
+	KindSessionContext   = "session_context"   // session-scoped signals
+	KindNetworkTuple     = "network_tuple"     // IP/port/protocol conditions
+	KindCustom           = "custom"            // any other condition type
 )
 
 // Requirement is a single canonical atomic condition extracted from a policy.

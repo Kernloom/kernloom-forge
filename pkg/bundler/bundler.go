@@ -132,8 +132,8 @@ func Build(
 			ContextRegistryVersion: cfg.ContextRegistryVersion,
 			ActiveAdapters:         cfg.ActiveAdapters,
 			BaselineLifecycle: bundle.BaselineLifecycleConfig{
-				Enabled:          cfg.BaselineEnabled,
-				FreezeOnHighRisk: true,
+				Enabled:             cfg.BaselineEnabled,
+				FreezeOnHighRisk:    true,
 				MinLearningDuration: 7 * 24 * time.Hour,
 			},
 			GraphLifecycle: bundle.GraphLifecycleConfig{
@@ -431,7 +431,7 @@ func jsonCompact(v any) ([]byte, error) {
 // RequirementKind is re-exported for convenience in tests.
 // Matches the Kind constants from pkg/core/requirement.
 const (
-	KindRiskLevel    = "risk_level"
+	KindRiskLevel     = "risk_level"
 	KindDevicePosture = "device_posture"
-	KindAuthStrength = "auth_strength"
+	KindAuthStrength  = "auth_strength"
 )

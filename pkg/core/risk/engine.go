@@ -97,11 +97,11 @@ func Evaluate(
 			APIVersion: "kernloom.io/risk/v1alpha1",
 			Kind:       "RiskContribution",
 			Spec: ContributionSpec{
-				ModelRef:        ModelRef{ID: model.Metadata.Name, Version: model.Metadata.Version},
-				RuleID:          inp.ID,
-				ContextKey:      inp.Key,
-				BaseValue:       inp.BaseContribution,
-				Direction:       direction(inp.BaseContribution),
+				ModelRef:         ModelRef{ID: model.Metadata.Name, Version: model.Metadata.Version},
+				RuleID:           inp.ID,
+				ContextKey:       inp.Key,
+				BaseValue:        inp.BaseContribution,
+				Direction:        direction(inp.BaseContribution),
 				ConfidenceFactor: result.confidenceFactor,
 				FreshnessFactor:  result.freshnessFactor,
 				EffectiveValue:   effectiveValue,
@@ -208,8 +208,8 @@ func Evaluate(
 
 // inputEvalResult is the internal result of evaluating a single model input.
 type inputEvalResult struct {
-	missing          bool    // fact/indicator was not found or was stale
-	matched          bool    // condition fired
+	missing          bool // fact/indicator was not found or was stale
+	matched          bool // condition fired
 	confidenceFactor float64
 	freshnessFactor  float64
 }

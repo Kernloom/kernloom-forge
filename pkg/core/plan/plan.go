@@ -108,11 +108,11 @@ type RequirementEnforcement struct {
 // from the profile's default (e.g. a delegated requirement where the vendor
 // owns the runtime decision but Kernloom owns the risk assessment).
 type RequirementOwnership struct {
-	RiskAssessmentOwner       string `yaml:"riskAssessmentOwner,omitempty"`
-	EnterpriseDecisionOwner   string `yaml:"enterpriseDecisionOwner,omitempty"`
-	TargetAuthorizationOwner  string `yaml:"targetAuthorizationOwner,omitempty"`
-	PolicyEvaluationOwner     string `yaml:"policyEvaluationOwner,omitempty"`
-	EnforcementOwner          string `yaml:"enforcementOwner,omitempty"`
+	RiskAssessmentOwner      string `yaml:"riskAssessmentOwner,omitempty"`
+	EnterpriseDecisionOwner  string `yaml:"enterpriseDecisionOwner,omitempty"`
+	TargetAuthorizationOwner string `yaml:"targetAuthorizationOwner,omitempty"`
+	PolicyEvaluationOwner    string `yaml:"policyEvaluationOwner,omitempty"`
+	EnforcementOwner         string `yaml:"enforcementOwner,omitempty"`
 }
 
 // DelegationNote documents a delegated requirement.

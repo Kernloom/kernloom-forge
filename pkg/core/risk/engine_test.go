@@ -285,7 +285,7 @@ func TestEvaluate_ScenarioDomainCap(t *testing.T) {
 	//
 	// Here we test: unhealthy (35) + anomaly (25) → capped separately in their domains.
 	snapshot := snap(
-		fact("device.posture.status", "unhealthy"), // 35 → capped at 40 for domain
+		fact("device.posture.status", "unhealthy"),        // 35 → capped at 40 for domain
 		fact("subject.behavior.anomaly_detected", "true"), // 25 in access_behavior domain
 	)
 
@@ -314,8 +314,8 @@ func TestEvaluate_RiskEngineHasNoPEPDependency(t *testing.T) {
 		t.Errorf("output kind = %q, want RiskAssessment", a.Kind)
 	}
 	// No enforcement in the output.
-	_ = a.Spec.Score  // evidence only
-	_ = a.Spec.Level  // evidence only
+	_ = a.Spec.Score // evidence only
+	_ = a.Spec.Level // evidence only
 }
 
 // TestEvaluate_Deterministic — same inputs always produce same output.

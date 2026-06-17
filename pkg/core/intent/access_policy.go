@@ -40,10 +40,10 @@ import (
 //	      value: mfa
 //	  effect: allow
 type AccessPolicy struct {
-	APIVersion string            `yaml:"apiVersion"`
-	Kind       PolicyKind        `yaml:"kind"`
-	Metadata   PolicyMetadata    `yaml:"metadata"`
-	Spec       AccessPolicySpec  `yaml:"spec"`
+	APIVersion string           `yaml:"apiVersion"`
+	Kind       PolicyKind       `yaml:"kind"`
+	Metadata   PolicyMetadata   `yaml:"metadata"`
+	Spec       AccessPolicySpec `yaml:"spec"`
 }
 
 // AccessPolicySpec is the normative body of an AccessPolicy.
@@ -77,18 +77,18 @@ type Resource struct {
 // Structured format — explicit fields, readable by the compiler without
 // parsing an expression:
 //
-//	- id: require-mfa
-//	  type: authentication_strength
-//	  signal: subject.auth_strength
-//	  operator: gte
-//	  value: mfa
+//   - id: require-mfa
+//     type: authentication_strength
+//     signal: subject.auth_strength
+//     operator: gte
+//     value: mfa
 //
 // CEL format — a single expression, more concise and directly usable by
 // runtime PDPs:
 //
-//	- id: require-mfa
-//	  type: authentication_strength
-//	  cel: "subject.auth_strength >= 'mfa'"
+//   - id: require-mfa
+//     type: authentication_strength
+//     cel: "subject.auth_strength >= 'mfa'"
 //
 // Both formats may be provided simultaneously. When only the structured form
 // is present, CelExpr() derives the equivalent CEL expression automatically.

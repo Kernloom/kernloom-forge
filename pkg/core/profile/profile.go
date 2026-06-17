@@ -54,9 +54,9 @@ const (
 type RuntimeTiming string
 
 const (
-	TimingNearRuntime RuntimeTiming = "near_runtime"  // seconds to minutes
-	TimingCompileTime RuntimeTiming = "compile_time"  // only at config deployment
-	TimingInPath      RuntimeTiming = "in_path"       // synchronous, per connection
+	TimingNearRuntime RuntimeTiming = "near_runtime" // seconds to minutes
+	TimingCompileTime RuntimeTiming = "compile_time" // only at config deployment
+	TimingInPath      RuntimeTiming = "in_path"      // synchronous, per connection
 )
 
 // RuntimePath describes how Kernloom communicates decisions to the target.
