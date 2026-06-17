@@ -1,0 +1,157 @@
+apiVersion: kernloom.io/risk/v1alpha1
+kind: RiskModel
+
+metadata:
+  name: enterprise-access-risk
+  version: "1.0.0"
+  owner: security-architecture
+
+spec:
+  scopeTypes:
+    - subject
+    - device
+    - session
+
+  domains:
+    authentication:
+      maxContribution: 30
+    access_behavior:
+      maxContribution: 45
+    device_posture:
+      maxContribution: 35
+    infrastructure:
+      maxContribution: 10
+
+  inputs:
+    # ── Device posture ────────────────────────────────────────────────────────
+
+    - id: device_edr_unhealthy
+      source: context
+      key: device.edr.status
+      match: unhealthy
+      domain: device_posture
+      baseContribution: 35
+      confidenceMode: source
+      decay:
+        halfLife: 30m
+
+    - id: device_posture_degraded
+      source: context
+      key: device.posture.status
+      match: degraded
+      domain: device_posture
+      baseContribution: 20
+      confidenceMode: source
+      decay:
+        halfLife: 15m
+
+    - id: device_posture_unhealthy
+      source: context
+      key: device.posture.status
+      match: unhealthy
+      domain: device_posture
+      baseContribution: 35
+      confidenceMode: source
+      decay:
+        halfLife: 15m
+
+    - id: device_attestation_failed
+      source: context
+      key: device.attestation.status
+      match: failed
+      domain: device_posture
+      baseContribution: 30
+      confidenceMode: source
+      decay:
+        halfLife: 1h
+
+    # ── Authentication ────────────────────────────────────────────────────────
+
+    - id: auth_strength_weak_password_only
+      source: context
+      key: session.authentication.strength
+      match: password
+      domain: authentication
+      baseContribution: 15
+      confidenceMode: source
+
+    - id: auth_strength_none
+      source: context
+      key: session.authentication.strength
+      match: none
+      domain: authentication
+      baseContribution: 30
+      confidenceMode: source
+
+    # Strong MFA reduces risk (negative contribution).
+    - id: auth_strength_phishing_resistant
+      source: context
+      key: session.authentication.strength
+      match: phishing_resistant_mfa
+      domain: authentication
+      baseContribution: -10
+      confidenceMode: source
+
+    # ── Access behavior ───────────────────────────────────────────────────────
+
+    - id: subject_behavior_anomaly
+      source: context
+      key: subject.behavior.anomaly_detected
+      match: true
+      domain: access_behavior
+      baseContribution: 25
+      confidenceMode: source
+      decay:
+        halfLife: 10m
+
+    - id: edge_first_seen
+      source: context
+      key: communication.edge.status
+      match: first_seen
+      domain: access_behavior
+      baseContribution: 15
+      confidenceMode: source
+      decay:
+        halfLife: 24h
+
+    - id: edge_anomalous
+      source: context
+      key: communication.edge.status
+      match: anomalous
+      domain: access_behavior
+      baseContribution: 30
+      confidenceMode: source
+      decay:
+        halfLife: 15m
+
+    # ── Session context ───────────────────────────────────────────────────────
+
+    - id: session_external_zone
+      source: context
+      key: session.network_zone
+      match: external
+      domain: authentication
+      baseContribution: 8
+      confidenceMode: source
+
+    # ── Infrastructure ────────────────────────────────────────────────────────
+    # Infrastructure signals do NOT contribute to identity/subject risk.
+    # They contribute only to the infrastructure domain.
+
+    # (No subject/device rules in infrastructure domain by design.
+    # Infrastructure anomalies use the resource or edge scope, not subject.)
+
+  output:
+    range:
+      min: 0
+      max: 100
+    levels:
+      low:      [0, 29]
+      medium:   [30, 59]
+      high:     [60, 79]
+      critical: [80, 100]
+
+  validity:
+    ttl: 30m
+    minConfidence: 0.60
+    minCompleteness: 0.50
