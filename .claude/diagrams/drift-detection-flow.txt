@@ -1,0 +1,24 @@
+Drift Detection Flow
+====================
+
+           Desired State
+  Git / approved deployment plan
+                |
+                v
+          +------------+
+          | Drift      |
+          | Engine     |
+          +------------+
+                ^
+                |
+           Actual State
+  Target API / Read Adapter / PIP
+                |
+                v
+  Context Store / Actual State Store
+
+Outputs:
+- Drift Report
+- Alert / Ticket
+- Change Proposal PR
+- Optional auto-revert if explicitly allowed

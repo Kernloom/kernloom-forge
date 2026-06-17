@@ -1,0 +1,76 @@
+apiVersion: kernloom.io/v1alpha1
+kind: RuntimeActionCatalog
+metadata:
+  name: openziti-actions
+  adapterRef: openziti
+spec:
+  actions:
+    # remove_kernloom_access_attribute
+    #
+    # The correct restrictive pattern for OpenZiti:
+    #
+    # 1. During config deployment, Kernloom ensures the service policy for
+    #    "investor-apps" requires BOTH the subject role attribute AND the
+    #    Kernloom access signal:
+    #      service policy: allOf [#investors, #kl.access.active]
+    #
+    # 2. During normal operation, identities with the investors role also
+    #    have the Kernloom-managed attribute #kl.access.active.
+    #
+    # 3. When Kernloom detects elevated risk, it removes #kl.access.active
+    #    from the identity. The service policy's allOf requirement is no
+    #    longer met → dial is refused by the controller.
+    #
+    # 4. On TTL expiry (with valid fencing token), #kl.access.active is
+    #    restored. New dials are permitted again.
+    #
+    # This is correct because OpenZiti policies are positive-grant only
+    # (allOf/anyOf role matching). There are no deny rules. Adding a
+    # "restriction" attribute does NOT revoke existing access from other
+    # matching service policies.
+    - id: remove_kernloom_access_attribute
+      effect: restrictive
+      scope: role_attribute
+
+      preconditions:
+        - attribute_is_kernloom_namespaced
+        - service_policy_requires_attribute
+        - previous_state_recorded
+
+      parameters:
+        allowedAttributePrefix: "kl.access."
+
+      requirements:
+        ttl: required
+        lease: required
+        audit: required
+        autoRevert: required
+
+      revertStrategy:
+        type: compare_and_restore
+        requireFencingToken: true
+
+      conflictPolicy:
+        type: strongest_restriction_wins
+
+    # identity.disable
+    #
+    # Disables the identity entirely in the OpenZiti controller.
+    # Stronger than remove_kernloom_access_attribute: all service policies
+    # are affected, not just those requiring the kl.access.active attribute.
+    # Use for high/critical risk classifications.
+    - id: identity.disable
+      effect: restrictive
+      scope: identity
+
+      requirements:
+        ttl: required
+        lease: required
+        audit: required
+        autoRevert: required
+
+      revertStrategy:
+        type: restore_previous_state
+
+      conflictPolicy:
+        type: strongest_restriction_wins

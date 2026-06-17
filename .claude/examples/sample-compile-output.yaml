@@ -1,0 +1,87 @@
+apiVersion: kernloom.io/v1
+kind: CompileResult
+metadata:
+  sourcePolicy: investor-apps-access
+spec:
+  requirements:
+    - id: req-001
+      type: subject_match
+      object: subject.role
+      operator: eq
+      value: investors
+    - id: req-002
+      type: resource_match
+      object: resource.application_group
+      operator: eq
+      value: investor-apps
+    - id: req-003
+      type: authentication_strength
+      object: subject.auth_strength
+      operator: gte
+      value: mfa
+    - id: req-004
+      type: risk_level
+      object: subject.risk.level
+      operator: eq
+      value: low
+    - id: req-005
+      type: device_posture
+      object: device.posture.status
+      operator: eq
+      value: healthy
+  targets:
+    - name: zscaler
+      status: deployable
+      runtimeModel: delegated
+      coverage: high
+      implementedRequirements:
+        - req-001
+        - req-002
+        - req-003
+        - req-004
+        - req-005
+      delegatedRequirements:
+        - req-004
+        - req-005
+    - name: idp
+      status: partial
+      coverage: medium
+      implementedRequirements:
+        - req-001
+        - req-003
+      missingRequirements:
+        - req-004
+        - req-005
+    - name: netfilter
+      status: partial_downgraded
+      coverage: low
+      missingRequirements:
+        - req-001
+        - req-003
+        - req-004
+        - req-005
+      downgradedRequirements:
+        - req-002
+
+---
+apiVersion: kernloom.io/v1
+kind: SourceOfTruthReport
+metadata:
+  sourcePolicy: investor-apps-access
+sourceOfTruth:
+  enterprisePap: git
+  repository: kernloom-policies
+  branch: main
+  commit: 9f3a12c
+  pullRequest: 184
+  approvedBy:
+    - security-architecture
+    - app-owner-investor-apps
+  forgeRelease: 2026.06.12-001
+checks:
+  - name: approved_git_commit_present
+    result: pass
+  - name: config_pdp_decision_present
+    result: pass
+  - name: forge_consumed_approved_branch
+    result: pass

@@ -4,229 +4,234 @@
 // Package compiler implements the Kernloom policy compiler.
 //
 // Input:
-//   - AccessPolicy name + RequirementSet
-//   - CapabilityManifests (what each target can enforce)
-//   - RequirementMappings (how to translate each requirement per target)
+//   - AccessPolicy          — enterprise intent (vendor-neutral)
+//   - RequirementSet        — extracted canonical requirements
+//   - TargetIntegrationProfile — deployment-specific integration config
+//   - AdapterCapabilityManifest — product-level adapter capabilities
+//   - RequirementMappingSet  — how requirements map to capabilities
+//   - RuntimeActionCatalog   — available TTL-bounded actions (may be nil)
 //
-// Output — CompileReports:
-//   - EnforcementCoverageReport  — coverage level per requirement per target
-//   - DelegationReport           — delegated requirements with owner
-//   - SemanticDowngradeReport    — precision loss per requirement per target
-//   - RuntimeActionPlan          — requirements covered via Action Broker
+// Output per profile:
+//   - EnforcementPlan — per-requirement enforcement status, ownership,
+//     delegation notes, downgrade notes, compensating control bindings
 //
-// Coverage hierarchy (best → worst):
-//
-//	full > partial > delegated > runtime_action > pip_only > unsupported
-//
-// Only pip_only and unsupported count as enforcement gaps. All other coverage
-// levels represent a declared, documented form of enforcement.
+// Invariants:
+//   - Every requirement appears in the plan, never silently dropped.
+//   - compensating_control requires an allowed action in the profile.
+//   - delegated requires a delegation spec in the mapping.
+//   - partial requires a downgrade note in the mapping.
+//   - An unsupported requirement makes the plan non-deployable.
 package compiler
 
 import (
 	"time"
 
-	"github.com/kernloom/kernloom-forge/pkg/core/capability"
+	"github.com/kernloom/kernloom-forge/pkg/core/action"
+	"github.com/kernloom/kernloom-forge/pkg/core/adapter"
 	"github.com/kernloom/kernloom-forge/pkg/core/mapping"
-	"github.com/kernloom/kernloom-forge/pkg/core/report"
+	"github.com/kernloom/kernloom-forge/pkg/core/plan"
+	"github.com/kernloom/kernloom-forge/pkg/core/profile"
 	"github.com/kernloom/kernloom-forge/pkg/core/requirement"
 )
 
-// TargetInput bundles a CapabilityManifest with its RequirementMapping.
-// Mapping may be nil; the compiler falls back to coverage-only reporting.
-type TargetInput struct {
-	Manifest *capability.CapabilityManifest
-	Mapping  *mapping.RequirementMapping
+// TargetBundle groups the four adapter-level artifacts for one target.
+// The Catalog may be nil when no runtime actions are needed (config_only).
+type TargetBundle struct {
+	Adapter  *adapter.AdapterCapabilityManifest
+	Mappings *mapping.RequirementMappingSet
+	Catalog  *action.RuntimeActionCatalog // may be nil
 }
 
-// targetResult is the internal per-target output before aggregation.
-type targetResult struct {
-	Coverage       report.TargetCoverage
-	Delegations    []report.DelegationEntry
-	Downgrades     []report.SemanticDowngradeEntry
-	RuntimeActions []report.RuntimeActionEntry
-}
-
-// Compile runs the full compile pipeline for one policy against multiple targets.
-// Deterministic, no side effects.
+// Compile produces one EnforcementPlan per profile by matching the
+// RequirementSet against each profile's associated TargetBundle.
+//
+// bundles maps adapterRef (= profile.Spec.AdapterRef) to the loaded artifacts.
 func Compile(
-	policy string,
+	policyName string,
 	reqs *requirement.RequirementSet,
-	targets []TargetInput,
-) *report.CompileReports {
+	profiles []*profile.TargetIntegrationProfile,
+	bundles map[string]*TargetBundle,
+) []*plan.EnforcementPlan {
 	now := time.Now().UTC()
+	var plans []*plan.EnforcementPlan
 
-	reports := &report.CompileReports{
-		Coverage: report.EnforcementCoverageReport{
-			Kind:       "EnforcementCoverageReport",
-			APIVersion: "kernloom.io/v1",
-			PolicyName: policy,
-			CompiledAt: now,
-		},
-		Delegation: report.DelegationReport{
-			Kind:       "DelegationReport",
-			APIVersion: "kernloom.io/v1",
-			PolicyName: policy,
-			CompiledAt: now,
-		},
-		Downgrade: report.SemanticDowngradeReport{
-			Kind:       "SemanticDowngradeReport",
-			APIVersion: "kernloom.io/v1",
-			PolicyName: policy,
-			CompiledAt: now,
-		},
-		RuntimeActions: report.RuntimeActionPlan{
-			Kind:       "RuntimeActionPlan",
-			APIVersion: "kernloom.io/v1",
-			PolicyName: policy,
-			CompiledAt: now,
-		},
+	for _, prof := range profiles {
+		bundle := bundles[prof.Spec.AdapterRef]
+		p := compileOne(policyName, now, reqs, prof, bundle)
+		plans = append(plans, p)
 	}
 
-	for _, ti := range targets {
-		result := compileTarget(reqs, ti)
-		reports.Coverage.Targets = append(reports.Coverage.Targets, result.Coverage)
-		reports.Delegation.Delegations = append(reports.Delegation.Delegations, result.Delegations...)
-		reports.Downgrade.Downgrades = append(reports.Downgrade.Downgrades, result.Downgrades...)
-		reports.RuntimeActions.Entries = append(reports.RuntimeActions.Entries, result.RuntimeActions...)
-	}
-
-	return reports
+	return plans
 }
 
-// compileTarget produces a targetResult for one target. No side effects.
-func compileTarget(reqs *requirement.RequirementSet, ti TargetInput) targetResult {
-	m := ti.Manifest
-	mp := ti.Mapping
-
-	tc := report.TargetCoverage{
-		TargetName:   m.Metadata.Name,
-		TargetType:   string(m.Spec.TargetType),
-		RuntimeOwner: m.RuntimeDecisionOwner(),
-		ConfigOwner:  m.Spec.ConfigOwner,
+// compileOne produces one EnforcementPlan for a single profile.
+func compileOne(
+	policyName string,
+	now time.Time,
+	reqs *requirement.RequirementSet,
+	prof *profile.TargetIntegrationProfile,
+	bundle *TargetBundle,
+) *plan.EnforcementPlan {
+	ep := &plan.EnforcementPlan{
+		APIVersion: "kernloom.io/v1alpha1",
+		Kind:       "EnforcementPlan",
+		Metadata: plan.PlanMetadata{
+			Name:         policyName + "-" + prof.Metadata.Name,
+			SourcePolicy: policyName,
+			Target:       prof.Metadata.Name,
+			CompiledAt:   now,
+		},
 	}
 
-	var delegations    []report.DelegationEntry
-	var downgrades     []report.SemanticDowngradeEntry
-	var runtimeActions []report.RuntimeActionEntry
-
-	downgradeSeen := map[string]bool{}
-	addDowngrade := func(e report.SemanticDowngradeEntry) {
-		key := e.RequirementID + "|" + e.TargetName + "|" + e.From
-		if !downgradeSeen[key] {
-			downgradeSeen[key] = true
-			downgrades = append(downgrades, e)
-		}
-	}
-
-	gapCount := 0
+	var unsupported, delegated, compensating, downgrades []string
 
 	for _, req := range reqs.All() {
-		cov := m.CoverageFor(req.Kind)
-		rr := report.RequirementResult{
-			RequirementID:   req.ID,
-			RequirementKind: req.Kind,
-			Signal:          req.Signal,
-			CEL:             req.CEL,
-			Coverage:        string(cov),
+		entry := compileRequirement(req, prof, bundle)
+		ep.Spec.Requirements = append(ep.Spec.Requirements, entry)
+
+		switch entry.Status {
+		case plan.StatusUnsupported:
+			unsupported = append(unsupported, req.ID)
+		case plan.StatusDelegated:
+			delegated = append(delegated, req.ID)
+		case plan.StatusCompensatingControl:
+			compensating = append(compensating, req.ID)
+		case plan.StatusPartial:
+			downgrades = append(downgrades, req.ID)
 		}
-
-		if mp != nil {
-			if rule := mp.RuleFor(req.Kind); rule != nil {
-				rr.TargetField = rule.TargetField
-				rr.Note = rule.TranslationNote
-				if rule.SemanticDowngrade != nil {
-					addDowngrade(report.SemanticDowngradeEntry{
-						RequirementID: req.ID,
-						TargetName:    m.Metadata.Name,
-						From:          rule.SemanticDowngrade.From,
-						To:            rule.SemanticDowngrade.To,
-						Reason:        rule.SemanticDowngrade.Reason,
-					})
-				}
-			}
-		}
-
-		switch cov {
-		case capability.CoverageDelegated:
-			note := ""
-			if m.Spec.DelegationNotes != nil {
-				note = m.Spec.DelegationNotes[req.Kind]
-			}
-			delMode := string(mapping.DelegationVendorRuntime)
-			if mp != nil {
-				if rule := mp.RuleFor(req.Kind); rule != nil && rule.DelegationMode != "" {
-					delMode = string(rule.DelegationMode)
-				}
-			}
-			delegations = append(delegations, report.DelegationEntry{
-				RequirementID:   req.ID,
-				RequirementKind: req.Kind,
-				Signal:          req.Signal,
-				DelegatedTo:     m.Metadata.Name,
-				DelegationMode:  delMode,
-				RuntimeOwner:    m.RuntimeDecisionOwner(),
-				Note:            note,
-			})
-
-		case capability.CoveragePartial:
-			for _, d := range m.Spec.Downgrades {
-				if d.Requirement == req.Kind {
-					addDowngrade(report.SemanticDowngradeEntry{
-						RequirementID: req.ID,
-						TargetName:    m.Metadata.Name,
-						From:          d.From,
-						To:            d.To,
-						Reason:        d.Reason,
-					})
-				}
-			}
-
-		case capability.CoverageRuntimeAction:
-			actions := make([]string, 0, len(m.Spec.RuntimeActions))
-			for _, a := range m.Spec.RuntimeActions {
-				actions = append(actions, a.Action)
-			}
-			stateOwner := ""
-			if m.Spec.Ownership != nil {
-				stateOwner = m.Spec.Ownership.RuntimeState.String()
-			}
-			runtimeActions = append(runtimeActions, report.RuntimeActionEntry{
-				RequirementID:        req.ID,
-				RequirementKind:      req.Kind,
-				CEL:                  req.CEL,
-				TargetName:           m.Metadata.Name,
-				RuntimeDecisionOwner: m.RuntimeDecisionOwner(),
-				RuntimeStateOwner:    stateOwner,
-				AvailableActions:     actions,
-			})
-
-		case capability.CoverageUnsupported, capability.CoveragePIPOnly:
-			gapCount++
-		}
-
-		tc.Requirements = append(tc.Requirements, rr)
 	}
 
-	tc.Status = deriveStatus(len(reqs.All()), gapCount)
-
-	return targetResult{
-		Coverage:       tc,
-		Delegations:    delegations,
-		Downgrades:     downgrades,
-		RuntimeActions: runtimeActions,
+	ep.Spec.Summary = plan.PlanSummary{
+		Deployable:           len(unsupported) == 0,
+		RuntimeModel:         string(prof.Spec.Mode),
+		SemanticFidelity:     aggregateFidelity(ep.Spec.Requirements),
+		Delegation:           delegated,
+		CompensatingControls: compensating,
+		Downgrades:           downgrades,
+		Unsupported:          unsupported,
 	}
+
+	return ep
 }
 
-// deriveStatus computes the TargetStatus.
-// Gaps are unsupported and pip_only only — all other coverage levels are
-// declared and documented forms of enforcement.
-func deriveStatus(total, gaps int) report.TargetStatus {
-	switch {
-	case total == 0 || gaps == total:
-		return report.TargetStatusNotApplicable
-	case gaps > 0:
-		return report.TargetStatusPartial
-	default:
-		return report.TargetStatusDeployable
+// compileRequirement determines the enforcement status for one requirement.
+func compileRequirement(
+	req requirement.Requirement,
+	prof *profile.TargetIntegrationProfile,
+	bundle *TargetBundle,
+) plan.RequirementEnforcement {
+	entry := plan.RequirementEnforcement{
+		ID:          req.ID,
+		Requirement: req.CEL,
 	}
+
+	// No bundle → everything is unsupported.
+	if bundle == nil || bundle.Mappings == nil {
+		entry.Status = plan.StatusUnsupported
+		return entry
+	}
+
+	mappingEntry := bundle.Mappings.ForKind(req.Kind)
+	if mappingEntry == nil {
+		entry.Status = plan.StatusUnsupported
+		return entry
+	}
+
+	entry.Capability = mappingEntry.Capability.ID
+	entry.Fidelity = string(mappingEntry.Fidelity)
+
+	switch mappingEntry.Support {
+	case mapping.SupportFull:
+		entry.Status = plan.StatusImplemented
+
+	case mapping.SupportPartial:
+		entry.Status = plan.StatusPartial
+		if mappingEntry.Downgrade != nil {
+			entry.Downgrade = &plan.DowngradeNote{
+				From:   mappingEntry.Downgrade.From,
+				To:     mappingEntry.Downgrade.To,
+				Reason: mappingEntry.Downgrade.Reason,
+			}
+		}
+
+	case mapping.SupportDelegated:
+		entry.Status = plan.StatusDelegated
+		if mappingEntry.Delegation != nil {
+			entry.Delegation = &plan.DelegationNote{
+				EvaluationOwner: mappingEntry.Delegation.EvaluationOwner,
+				Note:            mappingEntry.Delegation.Note,
+			}
+			entry.Ownership = &plan.RequirementOwnership{
+				TargetAuthorizationOwner: mappingEntry.Delegation.EvaluationOwner,
+				PolicyEvaluationOwner:    mappingEntry.Delegation.EvaluationOwner,
+				EnforcementOwner:         prof.Spec.Ownership.Enforcement.Owner,
+			}
+		}
+
+	case mapping.SupportCompensatingControl:
+		b := mappingEntry.Binding
+		if b == nil {
+			entry.Status = plan.StatusUnsupported
+			return entry
+		}
+		// Validate the action is allowed in this profile.
+		if !prof.IsActionAllowed(b.Action) {
+			entry.Status = plan.StatusUnsupported
+			return entry
+		}
+		// Validate the action exists in the catalog.
+		if bundle.Catalog == nil || bundle.Catalog.ActionByID(b.Action) == nil {
+			entry.Status = plan.StatusUnsupported
+			return entry
+		}
+		entry.Status = plan.StatusCompensatingControl
+		entry.ActionBinding = &plan.ActionBinding{
+			Action:        b.Action,
+			Attribute:     b.Attribute,
+			DecisionOwner: b.DecisionOwner,
+		}
+		entry.Ownership = &plan.RequirementOwnership{
+			RiskAssessmentOwner:      b.RiskAssessmentOwner,
+			EnterpriseDecisionOwner:  b.DecisionOwner,
+			TargetAuthorizationOwner: prof.Spec.Ownership.TargetAuthorizationDecision.Owner,
+			PolicyEvaluationOwner:    prof.Spec.Ownership.TargetPolicyEvaluation.Owner,
+			EnforcementOwner:         prof.Spec.Ownership.Enforcement.Owner,
+		}
+
+	case mapping.SupportUnsupported:
+		entry.Status = plan.StatusUnsupported
+	}
+
+	return entry
+}
+
+// aggregateFidelity returns the lowest fidelity across all mapped requirements.
+// Unsupported requirements are excluded from the fidelity calculation.
+func aggregateFidelity(reqs []plan.RequirementEnforcement) string {
+	lowest := "high"
+	order := map[string]int{"high": 3, "medium": 2, "low": 1, "": 0}
+	for _, r := range reqs {
+		if r.Status == plan.StatusUnsupported {
+			continue
+		}
+		if r.Fidelity == "" {
+			continue
+		}
+		if order[r.Fidelity] < order[lowest] {
+			lowest = r.Fidelity
+		}
+	}
+	if lowest == "high" && allUnsupported(reqs) {
+		return "none"
+	}
+	return lowest
+}
+
+func allUnsupported(reqs []plan.RequirementEnforcement) bool {
+	for _, r := range reqs {
+		if r.Status != plan.StatusUnsupported {
+			return false
+		}
+	}
+	return true
 }

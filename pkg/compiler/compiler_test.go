@@ -7,16 +7,124 @@ import (
 	"testing"
 
 	"github.com/kernloom/kernloom-forge/pkg/compiler"
-	"github.com/kernloom/kernloom-forge/pkg/core/capability"
+	"github.com/kernloom/kernloom-forge/pkg/core/action"
+	"github.com/kernloom/kernloom-forge/pkg/core/adapter"
 	"github.com/kernloom/kernloom-forge/pkg/core/intent"
-	"github.com/kernloom/kernloom-forge/pkg/core/report"
+	"github.com/kernloom/kernloom-forge/pkg/core/mapping"
+	"github.com/kernloom/kernloom-forge/pkg/core/plan"
+	"github.com/kernloom/kernloom-forge/pkg/core/profile"
 	"github.com/kernloom/kernloom-forge/pkg/core/requirement"
 )
 
-// sharedPolicy returns the canonical golden test policy:
+// TestGoldenInvestorApps is the canonical MVP acceptance test:
 //
 //	investors may access investor-apps only with MFA, low risk and healthy device
-func sharedPolicy() *intent.AccessPolicy {
+//
+// Targets:
+//   - openziti-production (enterprise_risk_overlay):
+//     subject/resource=implemented, auth=delegated, risk=compensating_control, posture=partial
+//     → deployable
+//   - openziti-config-only (config_only, no runtime actions):
+//     risk_level mapping is partial (posture-as-proxy), not compensating_control
+//     → deployable
+//   - idp-production (config_only):
+//     subject/resource/auth=full, risk/posture=partial → deployable
+//   - klshield-local (kernloom_pdp_native):
+//     auth=unsupported → NOT deployable
+func TestGoldenInvestorApps(t *testing.T) {
+	policy := investorAppsPolicy()
+	reqs, err := requirement.Extract(policy)
+	if err != nil {
+		t.Fatalf("Extract: %v", err)
+	}
+
+	profiles := []*profile.TargetIntegrationProfile{
+		openzitiProductionProfile(),
+		openzitiConfigOnlyProfile(),
+		idpProductionProfile(),
+		klshieldLocalProfile(),
+	}
+
+	bundles := map[string]*compiler.TargetBundle{
+		"openziti": openzitiBundle(),
+		"idp":      idpBundle(),
+		"klshield": klshieldBundle(),
+	}
+
+	plans := compiler.Compile(policy.Metadata.Name, reqs, profiles, bundles)
+
+	// Find plans by target name.
+	find := func(target string) *plan.EnforcementPlan {
+		for _, p := range plans {
+			if p.Metadata.Target == target {
+				return p
+			}
+		}
+		t.Fatalf("no plan for target %q", target)
+		return nil
+	}
+
+	// ── openziti-production ──────────────────────────────────────────────────
+	oz := find("openziti-production")
+	assertDeployable(t, oz, true)
+	assertRequirementStatus(t, oz, "require-mfa", plan.StatusDelegated)
+	assertRequirementStatus(t, oz, "require-low-risk", plan.StatusCompensatingControl)
+	assertRequirementStatus(t, oz, "require-healthy-device", plan.StatusPartial)
+	assertRequirementStatus(t, oz, "subject-identity", plan.StatusImplemented)
+	assertRequirementStatus(t, oz, "resource-identity", plan.StatusImplemented)
+
+	// Compensating control binding must reference the correct action and attribute.
+	riskEntry := findRequirement(t, oz, "require-low-risk")
+	if riskEntry.ActionBinding == nil {
+		t.Error("require-low-risk: ActionBinding must not be nil")
+	} else {
+		if riskEntry.ActionBinding.Action != "remove_kernloom_access_attribute" {
+			t.Errorf("risk ActionBinding.Action = %q, want remove_kernloom_access_attribute",
+				riskEntry.ActionBinding.Action)
+		}
+		if riskEntry.ActionBinding.Attribute != "kl.access.active" {
+			t.Errorf("risk ActionBinding.Attribute = %q, want kl.access.active",
+				riskEntry.ActionBinding.Attribute)
+		}
+	}
+
+	// ── openziti-config-only ─────────────────────────────────────────────────
+	// No runtime actions allowed in this profile. The mapping declares risk_level
+	// as compensating_control, but the profile's empty allowedRuntimeActions causes
+	// the compiler to mark it unsupported → not deployable. This is correct: a
+	// config-only OpenZiti deployment cannot enforce enterprise risk.
+	ozco := find("openziti-config-only")
+	assertDeployable(t, ozco, false)
+	assertRequirementStatus(t, ozco, "require-low-risk", plan.StatusUnsupported)
+
+	// ── idp-production ────────────────────────────────────────────────────────
+	idp := find("idp-production")
+	assertDeployable(t, idp, true)
+	assertRequirementStatus(t, idp, "require-mfa", plan.StatusImplemented)
+	assertRequirementStatus(t, idp, "require-low-risk", plan.StatusPartial)
+	assertRequirementStatus(t, idp, "require-healthy-device", plan.StatusPartial)
+
+	// ── klshield-local ────────────────────────────────────────────────────────
+	ks := find("klshield-local")
+	// auth_strength is unsupported → not deployable for this policy.
+	assertDeployable(t, ks, false)
+	assertRequirementStatus(t, ks, "require-mfa", plan.StatusUnsupported)
+	assertRequirementStatus(t, ks, "require-low-risk", plan.StatusCompensatingControl)
+	assertRequirementStatus(t, ks, "require-healthy-device", plan.StatusCompensatingControl)
+
+	// No requirements silently dropped — all appear in every plan.
+	allReqs := reqs.All()
+	for _, p := range plans {
+		if len(p.Spec.Requirements) != len(allReqs) {
+			t.Errorf("plan %s: expected %d requirements, got %d",
+				p.Metadata.Target, len(allReqs), len(p.Spec.Requirements))
+		}
+	}
+}
+
+// ── Fixtures ─────────────────────────────────────────────────────────────────
+
+func investorAppsPolicy() *intent.AccessPolicy {
 	return &intent.AccessPolicy{
 		APIVersion: "kernloom.io/v1",
 		Kind:       intent.KindAccessPolicy,
@@ -38,267 +146,287 @@ func sharedPolicy() *intent.AccessPolicy {
 	}
 }
 
-// openzitiVariantB returns an OpenZiti manifest for Variant B:
-// Kernloom runtime PDP decides, OpenZiti enforces.
-// risk_level is covered via runtime_action (Action Broker → OpenZiti identity ops).
-func openzitiVariantB() *capability.CapabilityManifest {
-	return &capability.CapabilityManifest{
-		APIVersion: "kernloom.io/v1",
-		Kind:       "CapabilityManifest",
-		Metadata:   capability.ManifestMetadata{Name: "openziti"},
-		Spec: capability.ManifestSpec{
-			TargetType:      capability.TargetTypeVendorSubControlPlane,
-			IntegrationMode: capability.IntegrationModeHybridOutOfBand,
-			RuntimeOwner:    capability.DomainKernloom,
-			ConfigOwner:     capability.DomainKernloom,
-			Ownership: &capability.OwnershipDeclaration{
-				Intent:           capability.OwnerRef{Owner: capability.DomainKernloom, Component: capability.ComponentPMS},
-				RuntimeContext:   capability.OwnerRef{Owner: capability.DomainKernloom, Component: capability.ComponentPIPs},
-				RiskDecision:     capability.OwnerRef{Owner: capability.DomainKernloom, Component: capability.ComponentRiskEngine},
-				RuntimeDecision:  capability.OwnerRef{Owner: capability.DomainKernloom, Component: capability.ComponentRuntimePDP},
-				RuntimeState:     capability.OwnerRef{Owner: capability.DomainVendor, Component: capability.ComponentVendorController},
-				PolicyEvaluation: capability.OwnerRef{Owner: capability.DomainVendor, Component: capability.ComponentVendorController},
-				Enforcement:      capability.OwnerRef{Owner: capability.DomainVendor, Component: capability.ComponentVendorEdgeRouter},
-				Config:           capability.OwnerRef{Owner: capability.DomainKernloom, Component: capability.ComponentPMS},
+func openzitiProductionProfile() *profile.TargetIntegrationProfile {
+	return &profile.TargetIntegrationProfile{
+		APIVersion: "kernloom.io/v1alpha1",
+		Kind:       "TargetIntegrationProfile",
+		Metadata:   profile.ProfileMetadata{Name: "openziti-production"},
+		Spec: profile.ProfileSpec{
+			AdapterRef: "openziti",
+			Mode:       profile.ModeEnterpriseRiskOverlay,
+			Ownership: profile.ProfileOwnership{
+				EnterpriseControlDecision:   profile.ProfileOwner{Owner: "kernloom-runtime-pdp"},
+				TargetAuthorizationDecision: profile.ProfileOwner{Owner: "openziti-controller"},
+				TargetPolicyEvaluation:      profile.ProfileOwner{Owner: "openziti-controller"},
+				Enforcement:                 profile.ProfileOwner{Owner: "openziti-edge-router"},
 			},
-			RequirementCoverage: map[string]capability.CoverageLevel{
-				"subject_identity":  capability.CoverageFull,
-				"resource_identity": capability.CoverageFull,
-				"auth_strength":     capability.CoverageDelegated,
-				"risk_level":        capability.CoverageRuntimeAction,
-				"device_posture":    capability.CoveragePartial,
-				"session_context":   capability.CoverageUnsupported,
-				"network_tuple":     capability.CoverageUnsupported,
-				"custom":            capability.CoverageUnsupported,
+			AllowedRuntimeActions: []string{
+				"remove_kernloom_access_attribute",
+				"identity.disable",
 			},
-			DelegationNotes: map[string]string{
-				"auth_strength": "MFA enforced by OpenZiti controller MFA posture check",
+		},
+	}
+}
+
+func openzitiConfigOnlyProfile() *profile.TargetIntegrationProfile {
+	return &profile.TargetIntegrationProfile{
+		APIVersion: "kernloom.io/v1alpha1",
+		Kind:       "TargetIntegrationProfile",
+		Metadata:   profile.ProfileMetadata{Name: "openziti-config-only"},
+		Spec: profile.ProfileSpec{
+			AdapterRef:            "openziti",
+			Mode:                  profile.ModeConfigOnly,
+			AllowedRuntimeActions: []string{}, // no runtime actions
+		},
+	}
+}
+
+func idpProductionProfile() *profile.TargetIntegrationProfile {
+	return &profile.TargetIntegrationProfile{
+		APIVersion: "kernloom.io/v1alpha1",
+		Kind:       "TargetIntegrationProfile",
+		Metadata:   profile.ProfileMetadata{Name: "idp-production"},
+		Spec: profile.ProfileSpec{
+			AdapterRef:            "idp",
+			Mode:                  profile.ModeConfigOnly,
+			AllowedRuntimeActions: []string{},
+		},
+	}
+}
+
+func klshieldLocalProfile() *profile.TargetIntegrationProfile {
+	return &profile.TargetIntegrationProfile{
+		APIVersion: "kernloom.io/v1alpha1",
+		Kind:       "TargetIntegrationProfile",
+		Metadata:   profile.ProfileMetadata{Name: "klshield-local"},
+		Spec: profile.ProfileSpec{
+			AdapterRef: "klshield",
+			Mode:       profile.ModeKernloomPDPNative,
+			AllowedRuntimeActions: []string{
+				"network.flow_deny",
+				"network.flow_rate_limit",
+				"network.cgroup_block",
 			},
-			Downgrades: []capability.DowngradeDeclaration{
-				{
-					Requirement: "device_posture",
-					From:        "Enterprise posture: healthy/unhealthy/unknown with EDR signals",
-					To:          "OpenZiti posture check: pass/fail on configured criteria",
-					Reason:      "OpenZiti posture checks are binary; continuous EDR signals not consumed",
+		},
+	}
+}
+
+func openzitiBundle() *compiler.TargetBundle {
+	return &compiler.TargetBundle{
+		Adapter: &adapter.AdapterCapabilityManifest{
+			APIVersion: "kernloom.io/v1alpha1",
+			Kind:       "AdapterCapabilityManifest",
+			Metadata:   adapter.AdapterMetadata{Name: "openziti"},
+			Spec: adapter.AdapterSpec{
+				TargetType: adapter.TargetTypeVendorSubControlPlane,
+			},
+		},
+		Mappings: &mapping.RequirementMappingSet{
+			APIVersion: "kernloom.io/v1alpha1",
+			Kind:       "RequirementMappingSet",
+			Metadata:   mapping.MappingMetadata{Name: "openziti-mappings", AdapterRef: "openziti"},
+			Spec: mapping.MappingSetSpec{
+				Mappings: []mapping.MappingEntry{
+					{Requirement: mapping.RequirementRef{Kind: "subject_identity"},
+						Capability: mapping.CapabilityRef{ID: "identity.role_attributes"},
+						Support: mapping.SupportFull, Fidelity: mapping.FidelityHigh},
+					{Requirement: mapping.RequirementRef{Kind: "resource_identity"},
+						Capability: mapping.CapabilityRef{ID: "resource.service_definition"},
+						Support: mapping.SupportFull, Fidelity: mapping.FidelityHigh},
+					{Requirement: mapping.RequirementRef{Kind: "auth_strength"},
+						Capability: mapping.CapabilityRef{ID: "authentication.mfa_posture"},
+						Support: mapping.SupportDelegated, Fidelity: mapping.FidelityMedium,
+						Delegation: &mapping.DelegationSpec{EvaluationOwner: "openziti-controller"}},
+					{Requirement: mapping.RequirementRef{Kind: "risk_level"},
+						Support: mapping.SupportCompensatingControl, Fidelity: mapping.FidelityMedium,
+						Binding: &mapping.CompensatingBinding{
+							RiskAssessmentOwner: "kernloom-risk-engine",
+							DecisionOwner:       "kernloom-runtime-pdp",
+							Action:              "remove_kernloom_access_attribute",
+							Attribute:           "kl.access.active",
+						}},
+					{Requirement: mapping.RequirementRef{Kind: "device_posture"},
+						Capability: mapping.CapabilityRef{ID: "device.posture_check"},
+						Support: mapping.SupportPartial, Fidelity: mapping.FidelityMedium,
+						Downgrade: &mapping.DowngradeNote{
+							From:   "Enterprise posture with EDR signals",
+							To:     "OpenZiti posture check: binary pass/fail",
+							Reason: "OpenZiti posture checks are binary and static",
+						}},
+					{Requirement: mapping.RequirementRef{Kind: "session_context"},
+						Support: mapping.SupportUnsupported},
+					{Requirement: mapping.RequirementRef{Kind: "network_tuple"},
+						Support: mapping.SupportUnsupported},
+					{Requirement: mapping.RequirementRef{Kind: "custom"},
+						Support: mapping.SupportUnsupported},
 				},
 			},
-			RuntimeActions: []capability.RuntimeActionDeclaration{
-				{Action: "disable_identity", Scope: "identity",
-					RequiresTTL: true, AutoRevert: true},
-				{Action: "set_role_attribute", Scope: "role_attribute",
-					RequiresTTL: true, AutoRevert: true},
-				{Action: "remove_role_attribute", Scope: "role_attribute",
-					RequiresTTL: true, AutoRevert: true},
-				{Action: "activate_quarantine_service_policy", Scope: "service_policy",
-					RequiresTTL: true, AutoRevert: true},
-			},
 		},
-	}
-}
-
-// openzitiVariantA returns an OpenZiti manifest for Variant A:
-// runtime fully delegated to OpenZiti — config-only, no Kernloom runtime PDP.
-func openzitiVariantA() *capability.CapabilityManifest {
-	return &capability.CapabilityManifest{
-		APIVersion: "kernloom.io/v1",
-		Kind:       "CapabilityManifest",
-		Metadata:   capability.ManifestMetadata{Name: "openziti"},
-		Spec: capability.ManifestSpec{
-			TargetType:      capability.TargetTypeVendorSubControlPlane,
-			IntegrationMode: capability.IntegrationModeConfigOnly,
-			RuntimeOwner:    "vendor",
-			ConfigOwner:     "kernloom",
-			Ownership: &capability.OwnershipDeclaration{
-				Intent:           capability.OwnerRef{Owner: capability.DomainKernloom, Component: capability.ComponentPMS},
-				RuntimeContext:   capability.OwnerRef{Owner: capability.DomainVendor},
-				RiskDecision:     capability.OwnerRef{Owner: capability.DomainVendor},
-				RuntimeDecision:  capability.OwnerRef{Owner: capability.DomainVendor},
-				PolicyEvaluation: capability.OwnerRef{Owner: capability.DomainVendor, Component: capability.ComponentVendorController},
-				Enforcement:      capability.OwnerRef{Owner: capability.DomainVendor, Component: capability.ComponentVendorEdgeRouter},
-				Config:           capability.OwnerRef{Owner: capability.DomainKernloom, Component: capability.ComponentPMS},
-			},
-			RequirementCoverage: map[string]capability.CoverageLevel{
-				"subject_identity":  capability.CoverageFull,
-				"resource_identity": capability.CoverageFull,
-				"auth_strength":     capability.CoverageDelegated,
-				"risk_level":        capability.CoverageDelegated, // OpenZiti posture as proxy
-				"device_posture":    capability.CoveragePartial,
-				"session_context":   capability.CoverageUnsupported,
-				"network_tuple":     capability.CoverageUnsupported,
-				"custom":            capability.CoverageUnsupported,
-			},
-			DelegationNotes: map[string]string{
-				"auth_strength": "MFA enforced by OpenZiti controller MFA posture check",
-				"risk_level":    "Delegated to OpenZiti posture checks as structural proxy; enterprise EDR signals not consumed",
-			},
-			Downgrades: []capability.DowngradeDeclaration{
-				{
-					Requirement: "device_posture",
-					From:        "Enterprise posture: healthy/unhealthy/unknown with EDR signals",
-					To:          "OpenZiti posture check: pass/fail on configured criteria",
-					Reason:      "OpenZiti posture checks are binary; continuous EDR signals not consumed",
+		Catalog: &action.RuntimeActionCatalog{
+			APIVersion: "kernloom.io/v1alpha1",
+			Kind:       "RuntimeActionCatalog",
+			Metadata:   action.CatalogMetadata{Name: "openziti-actions", AdapterRef: "openziti"},
+			Spec: action.CatalogSpec{
+				Actions: []action.ActionEntry{
+					{
+						ID:     "remove_kernloom_access_attribute",
+						Effect: action.EffectRestrictive,
+						Scope:  "role_attribute",
+						Requirements: action.ActionRequirements{
+							TTL: action.LevelRequired, Lease: action.LevelRequired,
+						},
+						RevertStrategy: action.RevertStrategy{
+							Type: action.RevertCompareAndRestore, RequireFencingToken: true,
+						},
+						ConflictPolicy: action.ConflictPolicy{
+							Type: action.ConflictStrongestRestrictionWins,
+						},
+					},
+					{
+						ID:     "identity.disable",
+						Effect: action.EffectRestrictive,
+						Scope:  "identity",
+						Requirements: action.ActionRequirements{
+							TTL: action.LevelRequired, Lease: action.LevelRequired,
+						},
+						RevertStrategy: action.RevertStrategy{
+							Type: action.RevertRestorePreviousState,
+						},
+						ConflictPolicy: action.ConflictPolicy{
+							Type: action.ConflictStrongestRestrictionWins,
+						},
+					},
 				},
 			},
 		},
 	}
 }
 
-// TestGoldenInvestorApps_VariantB tests Variant B: Kernloom runtime PDP + OpenZiti enforcement.
-//
-// Expected outcomes:
-//   - openziti: deployable — risk_level via runtime_action, auth delegated, posture partial
-//   - idp:      deployable — full on subject/resource/auth, partial on risk/device
-//   - netfilter: partial   — identity/auth/risk/posture unsupported; only resource partial
-func TestGoldenInvestorApps_VariantB(t *testing.T) {
-	policy := sharedPolicy()
-	reqs, err := requirement.Extract(policy)
-	if err != nil {
-		t.Fatalf("Extract: %v", err)
-	}
-
-	idpManifest := idpTestManifest()
-	netfilterManifest := netfilterTestManifest()
-
-	targets := []compiler.TargetInput{
-		{Manifest: openzitiVariantB()},
-		{Manifest: idpManifest},
-		{Manifest: netfilterManifest},
-	}
-
-	reports := compiler.Compile(policy.Metadata.Name, reqs, targets)
-
-	// OpenZiti Variant B: deployable because risk_level is runtime_action (not a gap)
-	assertTargetStatus(t, reports, "openziti", report.TargetStatusDeployable)
-	assertTargetStatus(t, reports, "idp", report.TargetStatusDeployable)
-	assertTargetStatus(t, reports, "netfilter", report.TargetStatusPartial)
-
-	// Delegation: auth_strength delegated to OpenZiti
-	assertDelegationExists(t, reports, "require-mfa", "openziti")
-
-	// Downgrades: device_posture on OpenZiti and IdP; risk_level on IdP
-	assertDowngradeExists(t, reports, "require-healthy-device", "openziti")
-	assertDowngradeExists(t, reports, "require-healthy-device", "idp")
-	assertDowngradeExists(t, reports, "require-low-risk", "idp")
-	assertDowngradeExists(t, reports, "resource-identity", "netfilter")
-
-	// RuntimeActionPlan: risk_level covered via Action Broker on OpenZiti
-	assertRuntimeActionExists(t, reports, "require-low-risk", "openziti")
-
-	// The runtime action entry should reference Kernloom as decision owner
-	for _, e := range reports.RuntimeActions.Entries {
-		if e.RequirementID == "require-low-risk" && e.TargetName == "openziti" {
-			if e.RuntimeDecisionOwner != "kernloom/runtime-pdp" {
-				t.Errorf("runtime action: RuntimeDecisionOwner = %q, want kernloom/runtime-pdp", e.RuntimeDecisionOwner)
-			}
-			if e.RuntimeStateOwner != "vendor/controller" {
-				t.Errorf("runtime action: RuntimeStateOwner = %q, want vendor/controller", e.RuntimeStateOwner)
-			}
-			if len(e.AvailableActions) == 0 {
-				t.Error("runtime action: AvailableActions must not be empty")
-			}
-			break
-		}
-	}
-
-	// No requirements silently dropped
-	assertAllRequirementsPresent(t, reports, reqs, targets)
-}
-
-// TestGoldenInvestorApps_VariantA tests Variant A: runtime fully delegated to OpenZiti.
-//
-// Expected outcomes:
-//   - openziti: deployable — all requirements delegated or partial (no Kernloom runtime PDP)
-//   - risk_level is delegated, not runtime_action
-//   - no RuntimeActionPlan entries for OpenZiti
-func TestGoldenInvestorApps_VariantA(t *testing.T) {
-	policy := sharedPolicy()
-	reqs, err := requirement.Extract(policy)
-	if err != nil {
-		t.Fatalf("Extract: %v", err)
-	}
-
-	targets := []compiler.TargetInput{
-		{Manifest: openzitiVariantA()},
-	}
-
-	reports := compiler.Compile(policy.Metadata.Name, reqs, targets)
-
-	// Variant A: deployable (risk_level is delegated, not unsupported)
-	assertTargetStatus(t, reports, "openziti", report.TargetStatusDeployable)
-
-	// risk_level and auth_strength are both delegated to OpenZiti
-	assertDelegationExists(t, reports, "require-mfa", "openziti")
-	assertDelegationExists(t, reports, "require-low-risk", "openziti")
-
-	// No runtime action entries — this is config-only
-	for _, e := range reports.RuntimeActions.Entries {
-		if e.TargetName == "openziti" {
-			t.Errorf("Variant A should have no runtime action entries for openziti, got: %+v", e)
-		}
-	}
-}
-
-// ── Shared manifests ─────────────────────────────────────────────────────────
-
-func idpTestManifest() *capability.CapabilityManifest {
-	return &capability.CapabilityManifest{
-		APIVersion: "kernloom.io/v1",
-		Kind:       "CapabilityManifest",
-		Metadata:   capability.ManifestMetadata{Name: "idp"},
-		Spec: capability.ManifestSpec{
-			TargetType:      capability.TargetTypeIdentitySystem,
-			IntegrationMode: capability.IntegrationModeConfigOnly,
-			RuntimeOwner:    "vendor",
-			ConfigOwner:     "kernloom",
-			RequirementCoverage: map[string]capability.CoverageLevel{
-				"subject_identity":  capability.CoverageFull,
-				"resource_identity": capability.CoverageFull,
-				"auth_strength":     capability.CoverageFull,
-				"risk_level":        capability.CoveragePartial,
-				"device_posture":    capability.CoveragePartial,
-				"session_context":   capability.CoverageFull,
-				"network_tuple":     capability.CoverageUnsupported,
-				"custom":            capability.CoverageUnsupported,
-			},
-			Downgrades: []capability.DowngradeDeclaration{
-				{Requirement: "risk_level",
-					From:   "Enterprise risk: continuous EDR/SIEM composite score",
-					To:     "IdP sign-in risk: authentication-time signal only",
-					Reason: "IdP risk is evaluated at sign-in only"},
-				{Requirement: "device_posture",
-					From:   "Enterprise posture: healthy (EDR + patch + encryption + drift)",
-					To:     "IdP device compliance: MDM-reported compliant status",
-					Reason: "IdP compliance reflects MDM status only"},
+func idpBundle() *compiler.TargetBundle {
+	return &compiler.TargetBundle{
+		Adapter: &adapter.AdapterCapabilityManifest{
+			APIVersion: "kernloom.io/v1alpha1",
+			Kind:       "AdapterCapabilityManifest",
+			Metadata:   adapter.AdapterMetadata{Name: "idp"},
+			Spec:       adapter.AdapterSpec{TargetType: adapter.TargetTypeIdentitySystem},
+		},
+		Mappings: &mapping.RequirementMappingSet{
+			APIVersion: "kernloom.io/v1alpha1",
+			Kind:       "RequirementMappingSet",
+			Metadata:   mapping.MappingMetadata{Name: "idp-mappings", AdapterRef: "idp"},
+			Spec: mapping.MappingSetSpec{
+				Mappings: []mapping.MappingEntry{
+					{Requirement: mapping.RequirementRef{Kind: "subject_identity"},
+						Capability: mapping.CapabilityRef{ID: "identity.group_membership"},
+						Support: mapping.SupportFull, Fidelity: mapping.FidelityHigh},
+					{Requirement: mapping.RequirementRef{Kind: "resource_identity"},
+						Capability: mapping.CapabilityRef{ID: "resource.app_assignment"},
+						Support: mapping.SupportFull, Fidelity: mapping.FidelityHigh},
+					{Requirement: mapping.RequirementRef{Kind: "auth_strength"},
+						Capability: mapping.CapabilityRef{ID: "authentication.mfa"},
+						Support: mapping.SupportFull, Fidelity: mapping.FidelityHigh},
+					{Requirement: mapping.RequirementRef{Kind: "risk_level"},
+						Capability: mapping.CapabilityRef{ID: "risk.sign_in_risk"},
+						Support: mapping.SupportPartial, Fidelity: mapping.FidelityMedium,
+						Downgrade: &mapping.DowngradeNote{
+							From:   "Enterprise continuous risk score",
+							To:     "IdP sign-in risk at authentication time only",
+							Reason: "IdP risk evaluated at sign-in only",
+						}},
+					{Requirement: mapping.RequirementRef{Kind: "device_posture"},
+						Capability: mapping.CapabilityRef{ID: "device.mdm_compliance"},
+						Support: mapping.SupportPartial, Fidelity: mapping.FidelityMedium,
+						Downgrade: &mapping.DowngradeNote{
+							From:   "Enterprise posture: healthy (EDR + patch + encryption + drift)",
+							To:     "IdP device compliance: MDM-reported compliant status",
+							Reason: "IdP compliance reflects MDM status only",
+						}},
+					{Requirement: mapping.RequirementRef{Kind: "session_context"},
+						Capability: mapping.CapabilityRef{ID: "session.location_policy"},
+						Support: mapping.SupportFull, Fidelity: mapping.FidelityHigh},
+					{Requirement: mapping.RequirementRef{Kind: "network_tuple"},
+						Support: mapping.SupportUnsupported},
+					{Requirement: mapping.RequirementRef{Kind: "custom"},
+						Support: mapping.SupportUnsupported},
+				},
 			},
 		},
 	}
 }
 
-func netfilterTestManifest() *capability.CapabilityManifest {
-	return &capability.CapabilityManifest{
-		APIVersion: "kernloom.io/v1",
-		Kind:       "CapabilityManifest",
-		Metadata:   capability.ManifestMetadata{Name: "netfilter"},
-		Spec: capability.ManifestSpec{
-			TargetType:      capability.TargetTypeLocalPEP,
-			IntegrationMode: capability.IntegrationModeConfigOnly,
-			RuntimeOwner:    "kernloom",
-			ConfigOwner:     "kernloom",
-			RequirementCoverage: map[string]capability.CoverageLevel{
-				"subject_identity":  capability.CoverageUnsupported,
-				"resource_identity": capability.CoveragePartial,
-				"auth_strength":     capability.CoverageUnsupported,
-				"risk_level":        capability.CoverageUnsupported,
-				"device_posture":    capability.CoverageUnsupported,
-				"session_context":   capability.CoverageUnsupported,
-				"network_tuple":     capability.CoverageFull,
-				"custom":            capability.CoverageUnsupported,
+func klshieldBundle() *compiler.TargetBundle {
+	return &compiler.TargetBundle{
+		Adapter: &adapter.AdapterCapabilityManifest{
+			APIVersion: "kernloom.io/v1alpha1",
+			Kind:       "AdapterCapabilityManifest",
+			Metadata:   adapter.AdapterMetadata{Name: "klshield"},
+			Spec:       adapter.AdapterSpec{TargetType: adapter.TargetTypeLocalPEP},
+		},
+		Mappings: &mapping.RequirementMappingSet{
+			APIVersion: "kernloom.io/v1alpha1",
+			Kind:       "RequirementMappingSet",
+			Metadata:   mapping.MappingMetadata{Name: "klshield-mappings", AdapterRef: "klshield"},
+			Spec: mapping.MappingSetSpec{
+				Mappings: []mapping.MappingEntry{
+					{Requirement: mapping.RequirementRef{Kind: "subject_identity"},
+						Capability: mapping.CapabilityRef{ID: "identity.process_cgroup"},
+						Support: mapping.SupportPartial, Fidelity: mapping.FidelityLow,
+						Downgrade: &mapping.DowngradeNote{
+							From: "Enterprise role identity", To: "Local process/cgroup identity",
+							Reason: "eBPF tracks local processes; enterprise roles require IdP"}},
+					{Requirement: mapping.RequirementRef{Kind: "resource_identity"},
+						Capability: mapping.CapabilityRef{ID: "network.flow_control"},
+						Support: mapping.SupportPartial, Fidelity: mapping.FidelityMedium,
+						Downgrade: &mapping.DowngradeNote{
+							From: "Enterprise application_group", To: "IP/port set",
+							Reason: "KLShield resolves resources to network tuples only"}},
+					{Requirement: mapping.RequirementRef{Kind: "auth_strength"},
+						Support: mapping.SupportUnsupported},
+					{Requirement: mapping.RequirementRef{Kind: "risk_level"},
+						Capability: mapping.CapabilityRef{ID: "network.flow_deny"},
+						Support: mapping.SupportCompensatingControl, Fidelity: mapping.FidelityHigh,
+						Binding: &mapping.CompensatingBinding{
+							RiskAssessmentOwner: "kernloom-risk-engine",
+							DecisionOwner:       "kernloom-runtime-pdp",
+							Action:              "network.flow_deny",
+						}},
+					{Requirement: mapping.RequirementRef{Kind: "device_posture"},
+						Capability: mapping.CapabilityRef{ID: "network.flow_deny"},
+						Support: mapping.SupportCompensatingControl, Fidelity: mapping.FidelityHigh,
+						Binding: &mapping.CompensatingBinding{
+							RiskAssessmentOwner: "kernloom-risk-engine",
+							DecisionOwner:       "kernloom-runtime-pdp",
+							Action:              "network.flow_deny",
+						}},
+					{Requirement: mapping.RequirementRef{Kind: "session_context"},
+						Support: mapping.SupportUnsupported},
+					{Requirement: mapping.RequirementRef{Kind: "network_tuple"},
+						Capability: mapping.CapabilityRef{ID: "network.flow_control"},
+						Support: mapping.SupportFull, Fidelity: mapping.FidelityHigh},
+					{Requirement: mapping.RequirementRef{Kind: "custom"},
+						Support: mapping.SupportUnsupported},
+				},
 			},
-			Downgrades: []capability.DowngradeDeclaration{
-				{Requirement: "resource_identity",
-					From:   "application_group investor-apps (enterprise semantic grouping)",
-					To:     "nftables IP/port set manually compiled from service inventory",
-					Reason: "netfilter has no application-group concept"},
+		},
+		Catalog: &action.RuntimeActionCatalog{
+			APIVersion: "kernloom.io/v1alpha1",
+			Kind:       "RuntimeActionCatalog",
+			Metadata:   action.CatalogMetadata{Name: "klshield-actions", AdapterRef: "klshield"},
+			Spec: action.CatalogSpec{
+				Actions: []action.ActionEntry{
+					{ID: "network.flow_deny", Effect: action.EffectRestrictive, Scope: "flow",
+						Requirements: action.ActionRequirements{TTL: action.LevelRequired},
+						RevertStrategy: action.RevertStrategy{Type: action.RevertRestorePreviousState},
+						ConflictPolicy: action.ConflictPolicy{Type: action.ConflictStrongestRestrictionWins}},
+					{ID: "network.flow_rate_limit", Effect: action.EffectRestrictive, Scope: "flow",
+						Requirements: action.ActionRequirements{TTL: action.LevelRequired},
+						RevertStrategy: action.RevertStrategy{Type: action.RevertRestorePreviousState},
+						ConflictPolicy: action.ConflictPolicy{Type: action.ConflictStrongestRestrictionWins}},
+					{ID: "network.cgroup_block", Effect: action.EffectRestrictive, Scope: "cgroup",
+						Requirements: action.ActionRequirements{TTL: action.LevelRequired},
+						RevertStrategy: action.RevertStrategy{Type: action.RevertRestorePreviousState},
+						ConflictPolicy: action.ConflictPolicy{Type: action.ConflictStrongestRestrictionWins}},
+				},
 			},
 		},
 	}
@@ -306,61 +434,35 @@ func netfilterTestManifest() *capability.CapabilityManifest {
 
 // ── Assertion helpers ────────────────────────────────────────────────────────
 
-func assertTargetStatus(t *testing.T, reports *report.CompileReports, target string, want report.TargetStatus) {
+func assertDeployable(t *testing.T, p *plan.EnforcementPlan, want bool) {
 	t.Helper()
-	tc := reports.Coverage.TargetFor(target)
-	if tc == nil {
-		t.Fatalf("no coverage for target %q", target)
-	}
-	if tc.Status != want {
-		t.Errorf("target %q: status = %q, want %q", target, tc.Status, want)
-		for _, r := range tc.Requirements {
-			t.Logf("  %s (%s): %s", r.RequirementID, r.RequirementKind, r.Coverage)
-		}
+	if p.Spec.Summary.Deployable != want {
+		t.Errorf("plan %s: deployable = %v, want %v (unsupported: %v)",
+			p.Metadata.Target, p.Spec.Summary.Deployable, want, p.Spec.Summary.Unsupported)
 	}
 }
 
-func assertDelegationExists(t *testing.T, reports *report.CompileReports, reqID, targetName string) {
+func assertRequirementStatus(t *testing.T, p *plan.EnforcementPlan, reqID string, want plan.RequirementStatus) {
 	t.Helper()
-	for _, d := range reports.Delegation.Delegations {
-		if d.RequirementID == reqID && d.DelegatedTo == targetName {
+	for _, r := range p.Spec.Requirements {
+		if r.ID == reqID {
+			if r.Status != want {
+				t.Errorf("plan %s requirement %q: status = %q, want %q",
+					p.Metadata.Target, reqID, r.Status, want)
+			}
 			return
 		}
 	}
-	t.Errorf("expected delegation for requirement %q to target %q — not found", reqID, targetName)
+	t.Errorf("plan %s: requirement %q not found", p.Metadata.Target, reqID)
 }
 
-func assertDowngradeExists(t *testing.T, reports *report.CompileReports, reqID, targetName string) {
+func findRequirement(t *testing.T, p *plan.EnforcementPlan, reqID string) plan.RequirementEnforcement {
 	t.Helper()
-	for _, d := range reports.Downgrade.Downgrades {
-		if d.RequirementID == reqID && d.TargetName == targetName {
-			return
+	for _, r := range p.Spec.Requirements {
+		if r.ID == reqID {
+			return r
 		}
 	}
-	t.Errorf("expected semantic downgrade for requirement %q on target %q — not found", reqID, targetName)
-}
-
-func assertRuntimeActionExists(t *testing.T, reports *report.CompileReports, reqID, targetName string) {
-	t.Helper()
-	for _, e := range reports.RuntimeActions.Entries {
-		if e.RequirementID == reqID && e.TargetName == targetName {
-			return
-		}
-	}
-	t.Errorf("expected runtime action entry for requirement %q on target %q — not found", reqID, targetName)
-}
-
-func assertAllRequirementsPresent(t *testing.T, reports *report.CompileReports, reqs *requirement.RequirementSet, targets []compiler.TargetInput) {
-	t.Helper()
-	allReqs := reqs.All()
-	for _, ti := range targets {
-		tc := reports.Coverage.TargetFor(ti.Manifest.Metadata.Name)
-		if tc == nil {
-			t.Fatalf("missing target coverage for %s", ti.Manifest.Metadata.Name)
-		}
-		if len(tc.Requirements) != len(allReqs) {
-			t.Errorf("target %s: expected %d requirement rows, got %d",
-				ti.Manifest.Metadata.Name, len(allReqs), len(tc.Requirements))
-		}
-	}
+	t.Fatalf("plan %s: requirement %q not found", p.Metadata.Target, reqID)
+	return plan.RequirementEnforcement{}
 }

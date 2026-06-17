@@ -1,0 +1,28 @@
+Policy Author / Forge UI / Runtime Change Proposal
+                         │
+                         ▼
+                 Pull Request in Git
+            Enterprise PAP / Source of Truth
+                         │
+                         ▼
+        CI: Schema + Compiler + Config PDP
+                         │
+                         ▼
+      Reports: Coverage / Delegation / Downgrade
+                         │
+                         ▼
+                  Review / Approval
+                         │
+                         ▼
+                    Merge to main
+                         │
+                         ▼
+              Forge consumes approved state
+                         │
+                         ▼
+      Signed Runtime Packs + Config Deployment Plans
+                         │
+       ┌─────────────────┴─────────────────┐
+       ▼                                   ▼
+ Runtime PDPs                         Config Adapters
+ KLIQ / Correlate                     Zscaler / IdP / WAF

@@ -1,0 +1,48 @@
+apiVersion: kernloom.io/v1alpha1
+kind: RequirementMappingSet
+metadata:
+  name: netfilter-mappings
+  adapterRef: netfilter
+spec:
+  mappings:
+    - requirement:
+        kind: subject_identity
+      support: unsupported
+
+    - requirement:
+        kind: resource_identity
+      capability:
+        id: network.tuple_filter
+      support: partial
+      fidelity: low
+      downgrade:
+        from: Enterprise application_group with enterprise semantic meaning.
+        to: nftables IP/port set compiled from service inventory.
+        reason: netfilter has no application-group concept. Tuples must substitute.
+
+    - requirement:
+        kind: auth_strength
+      support: unsupported
+
+    - requirement:
+        kind: risk_level
+      support: unsupported
+
+    - requirement:
+        kind: device_posture
+      support: unsupported
+
+    - requirement:
+        kind: session_context
+      support: unsupported
+
+    - requirement:
+        kind: network_tuple
+      capability:
+        id: network.tuple_filter
+      support: full
+      fidelity: high
+
+    - requirement:
+        kind: custom
+      support: unsupported

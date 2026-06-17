@@ -1,0 +1,48 @@
+apiVersion: kernloom.io/v1alpha1
+kind: TargetIntegrationProfile
+metadata:
+  name: openziti-production
+spec:
+  adapterRef: openziti
+  mode: enterprise_risk_overlay
+
+  sourceOfTruth:
+    policy: git
+    desiredState: git
+
+  ownership:
+    enterpriseIntent:
+      owner: enterprise-git-pap
+    compilation:
+      owner: forge
+    configValidation:
+      owner: kernloom-config-pdp
+    configDeployment:
+      owner: platform-pipeline
+    riskAssessment:
+      owner: kernloom-risk-engine
+    enterpriseControlDecision:
+      owner: kernloom-runtime-pdp
+    # OpenZiti controller evaluates its own service policies on every dial,
+    # independently of Kernloom's out-of-band restriction decision.
+    targetAuthorizationDecision:
+      owner: openziti-controller
+    targetPolicyEvaluation:
+      owner: openziti-controller
+    enforcement:
+      owner: openziti-edge-router
+
+  runtime:
+    timing: near_runtime
+    path: out_of_band
+    composition: restrictive_and
+    constraints:
+      restrictiveOnly: true
+      requireTTL: true
+      requireAudit: true
+      requireLease: true
+      requireAutoRevert: true
+
+  allowedRuntimeActions:
+    - remove_kernloom_access_attribute
+    - identity.disable

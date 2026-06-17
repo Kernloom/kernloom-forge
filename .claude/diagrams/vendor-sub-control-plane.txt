@@ -1,0 +1,21 @@
+Enterprise PMS / Forge
+  owns: intent, models, governance, mappings, reports
+        │
+        ▼
+Config Path
+  owns: desired state, validation, approval, drift
+        │
+        ▼
+Zscaler Config Adapter
+  writes approved config
+        │
+        ▼
+Zscaler Sub-Control-Plane
+  owns/delegated: vendor context, user risk, device posture,
+                  policy evaluation, runtime enforcement
+        │
+        ▼
+Zscaler Telemetry / Outcomes
+        │
+        ▼
+Zscaler PIP Adapter → Context/Risk/Reports in Kernloom

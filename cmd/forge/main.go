@@ -5,9 +5,9 @@
 //
 // Commands:
 //
-//	forge compile --policy <file> --manifests <dir> --mappings <dir>
+//	forge compile --policy <file> --adapters <dir> --profiles <dir> [--output summary|yaml]
 //	forge validate --policy <file>
-//	forge validate-manifest --manifest <file>
+//	forge validate-adapter --adapter <file>
 package main
 
 import (
@@ -20,21 +20,22 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/kernloom/kernloom-forge/pkg/compiler"
-	"github.com/kernloom/kernloom-forge/pkg/core/capability"
+	"github.com/kernloom/kernloom-forge/pkg/core/action"
+	"github.com/kernloom/kernloom-forge/pkg/core/adapter"
 	"github.com/kernloom/kernloom-forge/pkg/core/intent"
 	"github.com/kernloom/kernloom-forge/pkg/core/mapping"
+	"github.com/kernloom/kernloom-forge/pkg/core/profile"
 	"github.com/kernloom/kernloom-forge/pkg/core/requirement"
 )
 
 func main() {
 	root := &cobra.Command{
 		Use:   "forge",
-		Short: "Kernloom policy compiler — translates enterprise intent into target plans",
+		Short: "Kernloom policy compiler — translates enterprise intent into enforcement plans",
 	}
-
 	root.AddCommand(compileCmd())
 	root.AddCommand(validateCmd())
-	root.AddCommand(validateManifestCmd())
+	root.AddCommand(validateAdapterCmd())
 
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -42,99 +43,98 @@ func main() {
 	}
 }
 
-// compileCmd implements: forge compile --policy <file> --manifests <dir> --mappings <dir>
+// compileCmd: forge compile --policy <file> --adapters <dir> --profiles <dir>
+//
+// --adapters <dir> contains one subdirectory per adapter (named after adapterRef):
+//
+//	adapters/openziti/capability.yaml
+//	adapters/openziti/mappings.yaml
+//	adapters/openziti/actions.yaml  (optional)
+//
+// --profiles <dir> contains TargetIntegrationProfile YAML files.
 func compileCmd() *cobra.Command {
-	var policyFile string
-	var manifestsDir string
-	var mappingsDir string
-	var outputFormat string
+	var policyFile, adaptersDir, profilesDir, outputFmt string
 
 	cmd := &cobra.Command{
 		Use:   "compile",
-		Short: "Compile a policy against capability manifests and produce reports",
+		Short: "Compile a policy against integration profiles",
 		Example: `  forge compile \
-    --policy examples/policies/investor-apps-access.yaml \
-    --manifests examples/manifests/ \
-    --mappings examples/mappings/`,
+    --policy  examples/policies/investor-apps-access.yaml \
+    --adapters examples/adapters/ \
+    --profiles examples/profiles/`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// 1. Load policy — peek kind first, then dispatch to typed parser.
+			// 1. Load and dispatch policy.
 			env, err := intent.LoadEnvelopeFromFile(policyFile)
 			if err != nil {
 				return fmt.Errorf("policy: %w", err)
 			}
 			if env.Kind != intent.KindAccessPolicy {
-				return fmt.Errorf("unsupported policy kind %q (only AccessPolicy is supported in this release)", env.Kind)
+				return fmt.Errorf("unsupported policy kind %q", env.Kind)
 			}
-			policy, err := intent.LoadAccessPolicyFromFile(policyFile)
+			pol, err := intent.LoadAccessPolicyFromFile(policyFile)
 			if err != nil {
 				return fmt.Errorf("policy: %w", err)
 			}
 
 			// 2. Extract requirements.
-			reqs, err := requirement.Extract(policy)
+			reqs, err := requirement.Extract(pol)
 			if err != nil {
 				return fmt.Errorf("requirement extraction: %w", err)
 			}
 
-			// 3. Load capability manifests.
-			manifests, err := loadManifests(manifestsDir)
+			// 3. Load profiles.
+			profiles, err := loadProfiles(profilesDir)
 			if err != nil {
-				return fmt.Errorf("manifests: %w", err)
+				return fmt.Errorf("profiles: %w", err)
 			}
-			if len(manifests) == 0 {
-				return fmt.Errorf("no CapabilityManifests found in %s", manifestsDir)
+			if len(profiles) == 0 {
+				return fmt.Errorf("no TargetIntegrationProfiles found in %s", profilesDir)
 			}
 
-			// 4. Load requirement mappings (optional per target).
-			mappings, err := loadMappings(mappingsDir)
+			// 4. Load adapter bundles (one per unique adapterRef).
+			bundles, err := loadBundles(adaptersDir, profiles)
 			if err != nil {
-				return fmt.Errorf("mappings: %w", err)
+				return fmt.Errorf("adapters: %w", err)
 			}
 
-			// 5. Assemble TargetInputs.
-			// MappingKey() uses adapterRef when set, otherwise metadata.name.
-			// This allows "openziti-config-only" to share the "openziti" mapping.
-			targets := make([]compiler.TargetInput, 0, len(manifests))
-			for _, m := range manifests {
-				ti := compiler.TargetInput{Manifest: m}
-				if mp, ok := mappings[m.MappingKey()]; ok {
-					ti.Mapping = mp
-				}
-				targets = append(targets, ti)
-			}
+			// 5. Compile.
+			plans := compiler.Compile(pol.Metadata.Name, reqs, profiles, bundles)
 
-			// 6. Compile.
-			reports := compiler.Compile(policy.Metadata.Name, reqs, targets)
-
-			// 7. Output.
-			switch outputFormat {
+			// 6. Output.
+			switch outputFmt {
 			case "summary":
-				fmt.Print(reports.Summary())
-			case "yaml":
-				if err := printYAML(reports); err != nil {
-					return err
+				for _, p := range plans {
+					fmt.Println(p.Summary())
 				}
+			case "yaml":
+				enc := yaml.NewEncoder(os.Stdout)
+				enc.SetIndent(2)
+				for _, p := range plans {
+					if err := enc.Encode(p); err != nil {
+						return err
+					}
+				}
+				_ = enc.Close()
 			default:
-				return fmt.Errorf("unknown output format %q (use summary or yaml)", outputFormat)
+				return fmt.Errorf("unknown output format %q (use summary or yaml)", outputFmt)
 			}
 			return nil
 		},
 	}
 
-	cmd.Flags().StringVar(&policyFile, "policy", "", "path to AccessPolicy YAML file (required)")
-	cmd.Flags().StringVar(&manifestsDir, "manifests", "", "directory containing CapabilityManifest YAML files (required)")
-	cmd.Flags().StringVar(&mappingsDir, "mappings", "", "directory containing RequirementMapping YAML files (optional)")
-	cmd.Flags().StringVar(&outputFormat, "output", "summary", "output format: summary | yaml")
+	cmd.Flags().StringVar(&policyFile, "policy", "", "AccessPolicy YAML file (required)")
+	cmd.Flags().StringVar(&adaptersDir, "adapters", "", "directory of adapter subdirectories (required)")
+	cmd.Flags().StringVar(&profilesDir, "profiles", "", "directory of TargetIntegrationProfile YAML files (required)")
+	cmd.Flags().StringVar(&outputFmt, "output", "summary", "output format: summary | yaml")
 	_ = cmd.MarkFlagRequired("policy")
-	_ = cmd.MarkFlagRequired("manifests")
-
+	_ = cmd.MarkFlagRequired("adapters")
+	_ = cmd.MarkFlagRequired("profiles")
 	return cmd
 }
 
-// validateCmd implements: forge validate --policy <file>
+// validateCmd: forge validate --policy <file>
 func validateCmd() *cobra.Command {
 	var policyFile string
-
 	cmd := &cobra.Command{
 		Use:   "validate",
 		Short: "Validate an AccessPolicy file",
@@ -156,87 +156,98 @@ func validateCmd() *cobra.Command {
 			return nil
 		},
 	}
-
-	cmd.Flags().StringVar(&policyFile, "policy", "", "path to AccessPolicy YAML file (required)")
+	cmd.Flags().StringVar(&policyFile, "policy", "", "AccessPolicy YAML file (required)")
 	_ = cmd.MarkFlagRequired("policy")
 	return cmd
 }
 
-// validateManifestCmd implements: forge validate-manifest --manifest <file>
-func validateManifestCmd() *cobra.Command {
-	var manifestFile string
-
+// validateAdapterCmd: forge validate-adapter --adapter <file>
+func validateAdapterCmd() *cobra.Command {
+	var adapterFile string
 	cmd := &cobra.Command{
-		Use:   "validate-manifest",
-		Short: "Validate a CapabilityManifest file",
+		Use:   "validate-adapter",
+		Short: "Validate an AdapterCapabilityManifest file",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			m, err := capability.LoadFromFile(manifestFile)
+			m, err := adapter.LoadFromFile(adapterFile)
 			if err != nil {
 				return err
 			}
-			fmt.Printf("OK: CapabilityManifest %q (%s) is valid\n", m.Metadata.Name, m.Spec.TargetType)
+			fmt.Printf("OK: AdapterCapabilityManifest %q (%s) is valid\n", m.Metadata.Name, m.Spec.TargetType)
 			return nil
 		},
 	}
-
-	cmd.Flags().StringVar(&manifestFile, "manifest", "", "path to CapabilityManifest YAML file (required)")
-	_ = cmd.MarkFlagRequired("manifest")
+	cmd.Flags().StringVar(&adapterFile, "adapter", "", "AdapterCapabilityManifest YAML file (required)")
+	_ = cmd.MarkFlagRequired("adapter")
 	return cmd
 }
 
-// loadManifests reads all *.yaml files in dir that are CapabilityManifests.
-func loadManifests(dir string) ([]*capability.CapabilityManifest, error) {
-	if dir == "" {
-		return nil, nil
-	}
+// loadProfiles reads all TargetIntegrationProfile YAML files from dir.
+func loadProfiles(dir string) ([]*profile.TargetIntegrationProfile, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, fmt.Errorf("reading %s: %w", dir, err)
 	}
-	var out []*capability.CapabilityManifest
+	var out []*profile.TargetIntegrationProfile
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".yaml") {
 			continue
 		}
-		m, err := capability.LoadFromFile(filepath.Join(dir, e.Name()))
+		p, err := profile.LoadFromFile(filepath.Join(dir, e.Name()))
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", e.Name(), err)
 		}
-		out = append(out, m)
+		out = append(out, p)
 	}
 	return out, nil
 }
 
-// loadMappings reads all *.yaml files in dir that are RequirementMappings,
-// keyed by their metadata.target.
-func loadMappings(dir string) (map[string]*mapping.RequirementMapping, error) {
-	out := make(map[string]*mapping.RequirementMapping)
-	if dir == "" {
-		return out, nil
+// loadBundles loads one TargetBundle per unique adapterRef found in profiles.
+// Adapter files are loaded from: <adaptersDir>/<adapterRef>/capability.yaml etc.
+func loadBundles(adaptersDir string, profiles []*profile.TargetIntegrationProfile) (map[string]*compiler.TargetBundle, error) {
+	seen := map[string]bool{}
+	for _, p := range profiles {
+		seen[p.Spec.AdapterRef] = true
 	}
-	entries, err := os.ReadDir(dir)
+
+	bundles := map[string]*compiler.TargetBundle{}
+	for ref := range seen {
+		base := filepath.Join(adaptersDir, ref)
+		bundle, err := loadBundle(base, ref)
+		if err != nil {
+			return nil, fmt.Errorf("adapter %q: %w", ref, err)
+		}
+		bundles[ref] = bundle
+	}
+	return bundles, nil
+}
+
+// loadBundle loads a TargetBundle from a single adapter directory.
+func loadBundle(dir, ref string) (*compiler.TargetBundle, error) {
+	b := &compiler.TargetBundle{}
+
+	capPath := filepath.Join(dir, "capability.yaml")
+	m, err := adapter.LoadFromFile(capPath)
 	if err != nil {
-		return nil, fmt.Errorf("reading %s: %w", dir, err)
+		return nil, fmt.Errorf("capability.yaml: %w", err)
 	}
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".yaml") {
-			continue
-		}
-		m, err := mapping.LoadFromFile(filepath.Join(dir, e.Name()))
-		if err != nil {
-			return nil, fmt.Errorf("%s: %w", e.Name(), err)
-		}
-		out[m.Metadata.Target] = m
-	}
-	return out, nil
-}
+	b.Adapter = m
 
-// printYAML serialises the reports to stdout as YAML.
-func printYAML(reports interface{}) error {
-	enc := yaml.NewEncoder(os.Stdout)
-	enc.SetIndent(2)
-	if err := enc.Encode(reports); err != nil {
-		return fmt.Errorf("encoding YAML: %w", err)
+	mapPath := filepath.Join(dir, "mappings.yaml")
+	ms, err := mapping.LoadFromFile(mapPath)
+	if err != nil {
+		return nil, fmt.Errorf("mappings.yaml: %w", err)
 	}
-	return enc.Close()
+	b.Mappings = ms
+
+	actPath := filepath.Join(dir, "actions.yaml")
+	if _, err := os.Stat(actPath); err == nil {
+		cat, err := action.LoadFromFile(actPath)
+		if err != nil {
+			return nil, fmt.Errorf("actions.yaml: %w", err)
+		}
+		b.Catalog = cat
+	}
+
+	_ = ref
+	return b, nil
 }

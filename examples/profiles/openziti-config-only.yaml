@@ -1,0 +1,45 @@
+apiVersion: kernloom.io/v1alpha1
+kind: TargetIntegrationProfile
+metadata:
+  name: openziti-config-only
+spec:
+  adapterRef: openziti
+  mode: config_only
+
+  sourceOfTruth:
+    policy: git
+    desiredState: git
+
+  ownership:
+    enterpriseIntent:
+      owner: enterprise-git-pap
+    compilation:
+      owner: forge
+    configValidation:
+      owner: kernloom-config-pdp
+    configDeployment:
+      owner: platform-pipeline
+    riskAssessment:
+      owner: openziti-controller
+    enterpriseControlDecision:
+      owner: openziti-controller
+    targetAuthorizationDecision:
+      owner: openziti-controller
+    targetPolicyEvaluation:
+      owner: openziti-controller
+    enforcement:
+      owner: openziti-edge-router
+
+  runtime:
+    timing: compile_time
+    path: out_of_band
+    composition: vendor_only
+    constraints:
+      restrictiveOnly: true
+      requireTTL: false
+      requireAudit: false
+      requireLease: false
+      requireAutoRevert: false
+
+  # No runtime actions — config_only profile.
+  allowedRuntimeActions: []

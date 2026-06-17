@@ -1,0 +1,27 @@
+                 Git / PR / CI Enterprise PAP
+              Policies / Registries / Mappings
+                             │
+                             ▼
+                    Forge Consumer / Compiler
+                Publisher / Transparency Engine
+                             │
+        ┌────────────────────┼────────────────────┐
+        │                    │                    │
+        ▼                    ▼                    ▼
+ Canonical Requirements   Target Plans           Reports
+        │                    │                    │
+        ▼                    ▼                    ▼
+ Capability Matching     Config PDP       Delegation / Downgrade
+        │                    │                    │
+        ├───────────────┬────┴────┬───────────────┤
+        │               │         │               │
+        ▼               ▼         ▼               ▼
+ Runtime Packs     Config Plans  Source-of-Truth  Coverage
+        │               │
+        ▼               ▼
+ Runtime PDPs      Config Adapters
+ KLIQ / Correlate  Zscaler / IdP / WAF / Cloud
+        │               │
+        ▼               ▼
+ PEPs / Actions    Vendor PAPs / Target APIs
+ KLShield etc.     Zscaler Admin API etc.

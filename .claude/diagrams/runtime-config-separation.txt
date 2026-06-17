@@ -1,0 +1,25 @@
+Runtime Path                                  Config Path
+------------                                  -----------
+Runtime Event                                 Policy Author / Proposal Service
+  ↓                                             ↓
+PIP / Signal                                  PR in Git / Enterprise PAP
+  ↓                                             ↓
+Risk Engine / Risk Fact                       CI schema + compile dry-run
+  ↓                                             ↓
+Runtime PDP Decision                          Config PDP Validation
+  ↓                                             ↓
+Action Broker                                 Reports attached to PR
+  ↓                                             ↓
+Runtime Adapter / PEP                         Review / Approval
+  ↓                                             ↓
+TTL Action                                    Merge to approved branch
+  ↓                                             ↓
+Enforcement Receipt                           Forge consumes approved state
+                                                ↓
+                                             Config Adapter / Operator
+                                                ↓
+                                             Target API / Vendor PAP
+
+Rule:
+Runtime may create a PR proposal.
+Runtime must not directly mutate durable config.

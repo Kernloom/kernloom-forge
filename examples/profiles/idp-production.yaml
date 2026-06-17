@@ -1,0 +1,44 @@
+apiVersion: kernloom.io/v1alpha1
+kind: TargetIntegrationProfile
+metadata:
+  name: idp-production
+spec:
+  adapterRef: idp
+  mode: config_only
+
+  sourceOfTruth:
+    policy: git
+    desiredState: git
+
+  ownership:
+    enterpriseIntent:
+      owner: enterprise-git-pap
+    compilation:
+      owner: forge
+    configValidation:
+      owner: kernloom-config-pdp
+    configDeployment:
+      owner: platform-pipeline
+    riskAssessment:
+      owner: idp-risk-engine
+    enterpriseControlDecision:
+      owner: idp-conditional-access
+    targetAuthorizationDecision:
+      owner: idp-conditional-access
+    targetPolicyEvaluation:
+      owner: idp-conditional-access
+    enforcement:
+      owner: idp-token-service
+
+  runtime:
+    timing: compile_time
+    path: out_of_band
+    composition: vendor_only
+    constraints:
+      restrictiveOnly: true
+      requireTTL: false
+      requireAudit: false
+      requireLease: false
+      requireAutoRevert: false
+
+  allowedRuntimeActions: []

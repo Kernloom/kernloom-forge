@@ -1,0 +1,69 @@
+apiVersion: kernloom.io/v1alpha1
+kind: RequirementMappingSet
+metadata:
+  name: klshield-mappings
+  adapterRef: klshield
+spec:
+  mappings:
+    - requirement:
+        kind: subject_identity
+      capability:
+        id: identity.process_cgroup
+      support: partial
+      fidelity: low
+      downgrade:
+        from: Enterprise role identity (e.g. "investors" from IdP directory).
+        to: Local process/cgroup identity (UID, cgroup path, PID).
+        reason: eBPF tracks local processes; enterprise roles require IdP.
+
+    - requirement:
+        kind: resource_identity
+      capability:
+        id: network.flow_control
+      support: partial
+      fidelity: medium
+      downgrade:
+        from: Enterprise application_group with semantic meaning.
+        to: IP/port set compiled from service inventory.
+        reason: KLShield resolves resources to network tuples only.
+
+    - requirement:
+        kind: auth_strength
+      support: unsupported
+
+    - requirement:
+        kind: risk_level
+      capability:
+        id: network.flow_deny
+      support: compensating_control
+      fidelity: high
+      binding:
+        riskAssessmentOwner: kernloom-risk-engine
+        decisionOwner: kernloom-runtime-pdp
+        action: network.flow_deny
+
+    - requirement:
+        kind: device_posture
+      capability:
+        id: network.flow_deny
+      support: compensating_control
+      fidelity: high
+      binding:
+        riskAssessmentOwner: kernloom-risk-engine
+        decisionOwner: kernloom-runtime-pdp
+        action: network.flow_deny
+
+    - requirement:
+        kind: session_context
+      support: unsupported
+
+    - requirement:
+        kind: network_tuple
+      capability:
+        id: network.flow_control
+      support: full
+      fidelity: high
+
+    - requirement:
+        kind: custom
+      support: unsupported

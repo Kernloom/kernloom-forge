@@ -1,0 +1,14 @@
+apiVersion: kernloom.io/v1alpha1
+kind: AdapterCapabilityManifest
+metadata:
+  name: netfilter
+  version: "1.0"
+spec:
+  targetType: local_pep
+  roles: [kernloom_pep]
+  capabilities:
+    - id: network.tuple_filter
+      category: network
+      operations: [block, allow]
+      evaluationOwner: kernloom
+      enforcementOwner: kernloom

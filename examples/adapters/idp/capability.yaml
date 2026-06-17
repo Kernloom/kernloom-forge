@@ -1,0 +1,42 @@
+apiVersion: kernloom.io/v1alpha1
+kind: AdapterCapabilityManifest
+metadata:
+  name: idp
+  version: "1.0"
+spec:
+  targetType: identity_system
+  roles: [vendor_pap, vendor_runtime_pdp, vendor_pep, pip_read]
+  capabilities:
+    - id: identity.group_membership
+      category: identity
+      operations: [read, write]
+    - id: resource.app_assignment
+      category: resource_identity
+      operations: [read, write]
+    - id: authentication.mfa
+      category: authentication
+      operations: [configure]
+      evaluationOwner: vendor
+      enforcementOwner: vendor
+    - id: risk.sign_in_risk
+      category: risk
+      evaluationOwner: vendor
+    - id: device.mdm_compliance
+      category: posture
+      evaluationOwner: vendor
+    - id: session.location_policy
+      category: session
+      operations: [configure]
+      evaluationOwner: vendor
+    - id: authorization.token_issuance
+      category: runtime_authorization
+      evaluationOwner: vendor
+      enforcementOwner: vendor
+    - id: identity.session_revoke
+      category: runtime_action
+      effect: restrictive
+      support: unconditional
+    - id: identity.account_disable
+      category: runtime_action
+      effect: restrictive
+      support: unconditional

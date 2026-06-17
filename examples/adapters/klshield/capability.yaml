@@ -1,0 +1,30 @@
+apiVersion: kernloom.io/v1alpha1
+kind: AdapterCapabilityManifest
+metadata:
+  name: klshield
+  version: "1.0"
+spec:
+  targetType: local_pep
+  roles: [kernloom_pep, pip_read]
+  capabilities:
+    - id: network.flow_control
+      category: network
+      operations: [block, rate_limit, redirect]
+      evaluationOwner: kernloom
+      enforcementOwner: kernloom
+    - id: identity.process_cgroup
+      category: identity
+      operations: [read]
+      evaluationOwner: kernloom
+    - id: network.flow_deny
+      category: runtime_action
+      effect: restrictive
+      support: unconditional
+    - id: network.flow_rate_limit
+      category: runtime_action
+      effect: restrictive
+      support: unconditional
+    - id: network.cgroup_block
+      category: runtime_action
+      effect: restrictive
+      support: unconditional

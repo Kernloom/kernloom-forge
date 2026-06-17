@@ -1,0 +1,57 @@
+apiVersion: kernloom.io/v1alpha1
+kind: AdapterCapabilityManifest
+metadata:
+  name: openziti
+  version: "1.0"
+spec:
+  targetType: vendor_sub_control_plane
+  roles:
+    - vendor_pap
+    - vendor_runtime_pdp
+    - vendor_pep
+    - pip_read
+
+  capabilities:
+    - id: identity.role_attributes
+      category: identity
+      operations: [read, write]
+
+    - id: resource.service_definition
+      category: resource_identity
+      operations: [read, create, update, delete]
+
+    - id: access_control.service_policy
+      category: access_control
+      operations: [read, create, update, delete]
+
+    - id: authentication.mfa_posture
+      category: authentication
+      evaluationOwner: vendor
+
+    - id: device.posture_check
+      category: posture
+      evaluationOwner: vendor
+
+    - id: authorization.dial
+      category: runtime_authorization
+      evaluationOwner: vendor
+      enforcementOwner: vendor
+
+    # identity.disable: temporarily disables the identity in the controller.
+    # All new dials are refused until re-enabled. Restrictive, TTL-bounded.
+    - id: identity.disable
+      category: runtime_action
+      effect: restrictive
+      support: unconditional
+
+    # identity.role_attribute_update: adds or removes role attributes.
+    # Must be used with pre-staged service policies that use Kernloom-namespaced
+    # attributes as positive access signals (e.g. kl.access.active).
+    # NOTE: OpenZiti service policies grant access via positive role matching
+    # (allOf/anyOf). Adding a "restriction" attribute does NOT revoke existing
+    # access from other matching policies. The correct pattern is to REMOVE
+    # a required positive access attribute.
+    - id: identity.role_attribute_update
+      category: runtime_action
+      effect: context_dependent
+      support: conditional

@@ -1,0 +1,71 @@
+apiVersion: kernloom.io/v1alpha1
+kind: RequirementMappingSet
+metadata:
+  name: idp-mappings
+  adapterRef: idp
+spec:
+  mappings:
+    - requirement:
+        kind: subject_identity
+      capability:
+        id: identity.group_membership
+      support: full
+      fidelity: high
+
+    - requirement:
+        kind: resource_identity
+      capability:
+        id: resource.app_assignment
+      support: full
+      fidelity: high
+
+    - requirement:
+        kind: auth_strength
+      capability:
+        id: authentication.mfa
+      support: full
+      fidelity: high
+
+    - requirement:
+        kind: risk_level
+      capability:
+        id: risk.sign_in_risk
+      support: partial
+      fidelity: medium
+      downgrade:
+        from: >
+          Enterprise risk level: continuous EDR/SIEM composite score.
+        to: >
+          IdP sign-in risk: IdP-native signal at authentication time only.
+        reason: >
+          IdP risk is evaluated only at sign-in. Post-authentication continuous
+          risk requires custom claims injection or hybrid_out_of_band mode.
+
+    - requirement:
+        kind: device_posture
+      capability:
+        id: device.mdm_compliance
+      support: partial
+      fidelity: medium
+      downgrade:
+        from: >
+          Enterprise posture: healthy combining EDR, patch, encryption, drift.
+        to: >
+          IdP device compliance: compliant | not_compliant per MDM status.
+        reason: >
+          IdP compliance reflects MDM status. EDR signals require custom claims.
+
+    - requirement:
+        kind: session_context
+      capability:
+        id: session.location_policy
+      support: full
+      fidelity: high
+
+    - requirement:
+        kind: network_tuple
+      support: unsupported
+
+    - requirement:
+        kind: custom
+      support: unsupported

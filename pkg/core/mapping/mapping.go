@@ -1,17 +1,21 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Kernloom Contributors
 
-// Package mapping defines the RequirementMapping — the explicit, versioned
-// translation table that tells the compiler how each canonical requirement
-// maps to a target-specific construct.
+// Package mapping defines the RequirementMappingSet — how canonical
+// enterprise requirements translate to adapter-specific capabilities.
 //
-// A RequirementMapping is NOT generated automatically. It must be authored and
-// reviewed, and lives in Git as part of the Enterprise PAP. This ensures that
-// semantic translations are always intentional and auditable.
+// A RequirementMappingSet lives at the adapter level (shared across profiles)
+// and answers per requirement kind:
+//   - full              — capability natively and fully enforces the requirement
+//   - partial           — capability approximates with reduced semantic fidelity
+//   - delegated         — vendor's own PDP evaluates an equivalent condition natively
+//   - compensating_control — vendor cannot evaluate the requirement; Kernloom
+//     compensates via a TTL-bounded restrictive runtime action
+//   - unsupported       — no available mapping; requirement cannot be satisfied
 //
-// The mapping is separate from the CapabilityManifest: the manifest says what
-// a target *can* do in principle; the mapping says *how* to translate a
-// specific policy condition for that target.
+// The distinction between delegated and compensating_control is critical:
+//   delegated = vendor evaluates a semantically equivalent condition itself
+//   compensating_control = vendor has no equivalent; Kernloom acts as a side channel
 package mapping
 
 import (
@@ -21,130 +25,179 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// RequirementMapping is the top-level mapping document for a single target.
+// SupportLevel describes how well an adapter capability satisfies a requirement.
+type SupportLevel string
+
+const (
+	SupportFull               SupportLevel = "full"
+	SupportPartial            SupportLevel = "partial"
+	SupportDelegated          SupportLevel = "delegated"
+	SupportCompensatingControl SupportLevel = "compensating_control"
+	SupportUnsupported        SupportLevel = "unsupported"
+)
+
+// FidelityLevel describes the semantic precision of the mapping.
+type FidelityLevel string
+
+const (
+	FidelityHigh   FidelityLevel = "high"
+	FidelityMedium FidelityLevel = "medium"
+	FidelityLow    FidelityLevel = "low"
+)
+
+// RequirementMappingSet is the top-level adapter-level mapping document.
 //
 // Example YAML:
 //
-//	apiVersion: kernloom.io/v1
-//	kind: RequirementMapping
+//	apiVersion: kernloom.io/v1alpha1
+//	kind: RequirementMappingSet
 //	metadata:
-//	  name: openziti-mapping
-//	  target: openziti
+//	  name: openziti-mappings
+//	  adapterRef: openziti
 //	spec:
-//	  version: "1.0"
-//	  rules:
-//	    - requirementKind: subject_identity
-//	      targetField: service_policy.identity_attributes
-//	      translationNote: "Map role ref to OpenZiti identity attribute tag"
-//	    - requirementKind: auth_strength
-//	      targetField: delegated
-//	      delegationMode: vendor_runtime
-//	      translationNote: "MFA enforced by OpenZiti controller; not directly configurable per-policy"
-type RequirementMapping struct {
+//	  mappings:
+//	    - requirement:
+//	        kind: subject_identity
+//	      capability:
+//	        id: identity.role_attributes
+//	      support: full
+//	      fidelity: high
+//	    - requirement:
+//	        kind: risk_level
+//	      support: compensating_control
+//	      fidelity: medium
+//	      binding:
+//	        riskAssessmentOwner: kernloom-risk-engine
+//	        decisionOwner: kernloom-runtime-pdp
+//	        action: remove_kernloom_access_attribute
+type RequirementMappingSet struct {
 	APIVersion string          `yaml:"apiVersion"`
 	Kind       string          `yaml:"kind"`
 	Metadata   MappingMetadata `yaml:"metadata"`
-	Spec       MappingSpec     `yaml:"spec"`
+	Spec       MappingSetSpec  `yaml:"spec"`
 }
 
-// MappingMetadata identifies the requirement mapping document.
+// MappingMetadata identifies the mapping set.
 type MappingMetadata struct {
-	Name   string `yaml:"name"`
-	Target string `yaml:"target"` // must match the CapabilityManifest metadata.name
+	Name       string `yaml:"name"`
+	AdapterRef string `yaml:"adapterRef"`
 }
 
-// MappingSpec is the normative body of a RequirementMapping.
-type MappingSpec struct {
-	Version string        `yaml:"version"`
-	Rules   []MappingRule `yaml:"rules"`
+// MappingSetSpec holds all mapping entries.
+type MappingSetSpec struct {
+	Mappings []MappingEntry `yaml:"mappings"`
 }
 
-// DelegationMode describes how a delegated requirement is handled.
-type DelegationMode string
-
-const (
-	// DelegationVendorRuntime means the vendor's own runtime PDP evaluates this.
-	DelegationVendorRuntime DelegationMode = "vendor_runtime"
-
-	// DelegationExternalPIP means an external PIP supplies the value.
-	DelegationExternalPIP DelegationMode = "external_pip"
-
-	// DelegationNotApplicable means no delegation is involved.
-	DelegationNotApplicable DelegationMode = ""
-)
-
-// MappingRule describes how a single requirement kind translates to a
-// target-specific field or action.
-type MappingRule struct {
-	// RequirementKind is the canonical requirement Kind this rule applies to.
-	// Matches the Kind constants in the requirement package.
-	RequirementKind string `yaml:"requirementKind"`
-
-	// TargetField is the vendor-native field or construct that carries this
-	// requirement. Use "delegated" when no direct field exists.
-	TargetField string `yaml:"targetField"`
-
-	// DelegationMode describes how the requirement is handled when TargetField
-	// is "delegated".
-	DelegationMode DelegationMode `yaml:"delegationMode,omitempty"`
-
-	// SemanticDowngrade is set when the translation loses precision.
-	SemanticDowngrade *SemanticDowngrade `yaml:"semanticDowngrade,omitempty"`
-
-	// TranslationNote is a human-readable explanation of the mapping.
-	TranslationNote string `yaml:"translationNote,omitempty"`
+// RequirementRef identifies a canonical requirement kind (and optionally
+// a specific value, e.g. auth_strength with value "mfa").
+type RequirementRef struct {
+	Kind  string `yaml:"kind"`
+	Value string `yaml:"value,omitempty"`
 }
 
-// SemanticDowngrade documents the precision loss in a mapping rule.
-type SemanticDowngrade struct {
-	// From describes the enterprise-level semantic.
-	From string `yaml:"from"`
+// CapabilityRef references an adapter capability by its canonical ID.
+type CapabilityRef struct {
+	ID string `yaml:"id"`
+}
 
-	// To describes the reduced target-level semantic.
-	To string `yaml:"to"`
+// DelegationSpec documents a delegated requirement: the vendor's own component
+// evaluates a semantically equivalent condition at runtime.
+type DelegationSpec struct {
+	EvaluationOwner string `yaml:"evaluationOwner"`
+	Note            string `yaml:"note,omitempty"`
+}
 
-	// Reason explains why the downgrade is unavoidable.
+// CompensatingBinding documents a compensating control: the requirement
+// cannot be evaluated by the vendor natively; Kernloom compensates by
+// issuing a TTL-bounded restrictive action when the condition is violated.
+type CompensatingBinding struct {
+	RiskAssessmentOwner string `yaml:"riskAssessmentOwner"`
+	DecisionOwner       string `yaml:"decisionOwner"`
+	Action              string `yaml:"action"`
+	// Attribute is the vendor-specific object the action targets, if applicable.
+	// For OpenZiti: the role attribute to remove (e.g. "kl.access.active").
+	Attribute string `yaml:"attribute,omitempty"`
+}
+
+// DowngradeNote documents the semantic precision loss when support is partial.
+type DowngradeNote struct {
+	From   string `yaml:"from"`
+	To     string `yaml:"to"`
 	Reason string `yaml:"reason"`
 }
 
-// RuleFor returns the MappingRule for a given requirement kind.
-// Returns nil if no rule exists for that kind.
-func (m *RequirementMapping) RuleFor(kind string) *MappingRule {
-	for i := range m.Spec.Rules {
-		if m.Spec.Rules[i].RequirementKind == kind {
-			return &m.Spec.Rules[i]
+// MappingEntry declares the mapping for one requirement kind.
+type MappingEntry struct {
+	// Requirement identifies the canonical requirement this entry covers.
+	Requirement RequirementRef `yaml:"requirement"`
+
+	// Capability is the adapter capability that handles this requirement.
+	// Omit for compensating_control (no direct capability; action compensates).
+	Capability CapabilityRef `yaml:"capability,omitempty"`
+
+	// Support declares the quality of coverage.
+	Support SupportLevel `yaml:"support"`
+
+	// Fidelity describes how precisely the adapter represents the requirement's
+	// enterprise semantics. Absent when support is unsupported.
+	Fidelity FidelityLevel `yaml:"fidelity,omitempty"`
+
+	// Delegation is set when support is delegated.
+	Delegation *DelegationSpec `yaml:"delegation,omitempty"`
+
+	// Binding is set when support is compensating_control.
+	Binding *CompensatingBinding `yaml:"binding,omitempty"`
+
+	// Downgrade documents the precision loss when support is partial.
+	Downgrade *DowngradeNote `yaml:"downgrade,omitempty"`
+
+	Note string `yaml:"note,omitempty"`
+}
+
+// ForKind returns the MappingEntry for the given requirement kind.
+// Returns nil if no mapping exists for that kind.
+func (m *RequirementMappingSet) ForKind(kind string) *MappingEntry {
+	for i := range m.Spec.Mappings {
+		if m.Spec.Mappings[i].Requirement.Kind == kind {
+			return &m.Spec.Mappings[i]
 		}
 	}
 	return nil
 }
 
-// Validate performs basic structural checks on a RequirementMapping.
-func (m *RequirementMapping) Validate() error {
+// Validate performs basic structural checks.
+func (m *RequirementMappingSet) Validate() error {
 	if m.APIVersion == "" {
 		return fmt.Errorf("apiVersion is required")
 	}
-	if m.Kind != "RequirementMapping" {
-		return fmt.Errorf("kind must be RequirementMapping, got %q", m.Kind)
+	if m.Kind != "RequirementMappingSet" {
+		return fmt.Errorf("kind must be RequirementMappingSet, got %q", m.Kind)
 	}
 	if m.Metadata.Name == "" {
 		return fmt.Errorf("metadata.name is required")
 	}
-	if m.Metadata.Target == "" {
-		return fmt.Errorf("metadata.target is required")
+	if m.Metadata.AdapterRef == "" {
+		return fmt.Errorf("metadata.adapterRef is required")
 	}
-	for i, r := range m.Spec.Rules {
-		if r.RequirementKind == "" {
-			return fmt.Errorf("spec.rules[%d].requirementKind is required", i)
+	for i, e := range m.Spec.Mappings {
+		if e.Requirement.Kind == "" {
+			return fmt.Errorf("spec.mappings[%d].requirement.kind is required", i)
 		}
-		if r.TargetField == "" {
-			return fmt.Errorf("spec.rules[%d].targetField is required", i)
+		if e.Support == "" {
+			return fmt.Errorf("spec.mappings[%d].support is required", i)
+		}
+		if e.Support == SupportCompensatingControl && e.Binding == nil {
+			return fmt.Errorf("spec.mappings[%d] (%s): binding is required for compensating_control", i, e.Requirement.Kind)
+		}
+		if e.Support == SupportDelegated && e.Delegation == nil {
+			return fmt.Errorf("spec.mappings[%d] (%s): delegation is required for delegated", i, e.Requirement.Kind)
 		}
 	}
 	return nil
 }
 
-// LoadFromFile parses a RequirementMapping from a YAML file.
-func LoadFromFile(path string) (*RequirementMapping, error) {
+// LoadFromFile parses a RequirementMappingSet from a YAML file.
+func LoadFromFile(path string) (*RequirementMappingSet, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("reading %s: %w", path, err)
@@ -152,14 +205,14 @@ func LoadFromFile(path string) (*RequirementMapping, error) {
 	return Parse(data)
 }
 
-// Parse parses a RequirementMapping from raw YAML bytes.
-func Parse(data []byte) (*RequirementMapping, error) {
-	var m RequirementMapping
+// Parse parses a RequirementMappingSet from raw YAML bytes.
+func Parse(data []byte) (*RequirementMappingSet, error) {
+	var m RequirementMappingSet
 	if err := yaml.Unmarshal(data, &m); err != nil {
-		return nil, fmt.Errorf("parsing RequirementMapping: %w", err)
+		return nil, fmt.Errorf("parsing RequirementMappingSet: %w", err)
 	}
 	if err := m.Validate(); err != nil {
-		return nil, fmt.Errorf("invalid RequirementMapping: %w", err)
+		return nil, fmt.Errorf("invalid RequirementMappingSet: %w", err)
 	}
 	return &m, nil
 }

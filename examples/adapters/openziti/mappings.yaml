@@ -1,0 +1,81 @@
+apiVersion: kernloom.io/v1alpha1
+kind: RequirementMappingSet
+metadata:
+  name: openziti-mappings
+  adapterRef: openziti
+spec:
+  mappings:
+    - requirement:
+        kind: subject_identity
+      capability:
+        id: identity.role_attributes
+      support: full
+      fidelity: high
+      note: >
+        Map enterprise subject role to OpenZiti identity attribute tags.
+        E.g. role "investors" → attribute "#investors" on identities.
+        Service policy selects identities with this attribute.
+
+    - requirement:
+        kind: resource_identity
+      capability:
+        id: resource.service_definition
+      support: full
+      fidelity: high
+      note: >
+        Map application_group ref to one or more OpenZiti service names.
+        Group services via AppWAN or a shared service policy.
+
+    - requirement:
+        kind: auth_strength
+      capability:
+        id: authentication.mfa_posture
+      support: delegated
+      fidelity: medium
+      delegation:
+        evaluationOwner: openziti-controller
+        note: >
+          MFA enforcement via OpenZiti MFA posture check on the controller.
+          Applied globally when enabled; not configurable per service policy.
+          Kernloom configures whether MFA posture check is required; OpenZiti
+          evaluates it on every dial attempt.
+
+    - requirement:
+        kind: risk_level
+      support: compensating_control
+      fidelity: medium
+      binding:
+        riskAssessmentOwner: kernloom-risk-engine
+        decisionOwner: kernloom-runtime-pdp
+        action: remove_kernloom_access_attribute
+        attribute: kl.access.active
+
+    - requirement:
+        kind: device_posture
+      capability:
+        id: device.posture_check
+      support: partial
+      fidelity: medium
+      downgrade:
+        from: >
+          Enterprise posture: healthy | degraded | unhealthy | unknown,
+          aggregated from EDR, patch status, encryption, configuration drift.
+        to: >
+          OpenZiti posture check: pass | fail on configured static criteria
+          (process presence, OS version, domain membership, MAC address).
+        reason: >
+          OpenZiti posture checks are binary and static. Continuous EDR
+          signals cannot be consumed directly. Posture check criteria must
+          be maintained and re-deployed when device requirements change.
+
+    - requirement:
+        kind: session_context
+      support: unsupported
+
+    - requirement:
+        kind: network_tuple
+      support: unsupported
+
+    - requirement:
+        kind: custom
+      support: unsupported

@@ -1,0 +1,47 @@
+apiVersion: kernloom.io/v1alpha1
+kind: TargetIntegrationProfile
+metadata:
+  name: klshield-local
+spec:
+  adapterRef: klshield
+  mode: kernloom_pdp_native
+
+  sourceOfTruth:
+    policy: git
+    desiredState: git
+
+  ownership:
+    enterpriseIntent:
+      owner: enterprise-git-pap
+    compilation:
+      owner: forge
+    configValidation:
+      owner: kernloom-config-pdp
+    configDeployment:
+      owner: forge
+    riskAssessment:
+      owner: kernloom-risk-engine
+    enterpriseControlDecision:
+      owner: kernloom-runtime-pdp
+    targetAuthorizationDecision:
+      owner: kernloom-runtime-pdp
+    targetPolicyEvaluation:
+      owner: kernloom-runtime-pdp
+    enforcement:
+      owner: klshield-ebpf
+
+  runtime:
+    timing: in_path
+    path: in_path
+    composition: kernloom_only
+    constraints:
+      restrictiveOnly: true
+      requireTTL: true
+      requireAudit: true
+      requireLease: true
+      requireAutoRevert: true
+
+  allowedRuntimeActions:
+    - network.flow_deny
+    - network.flow_rate_limit
+    - network.cgroup_block
