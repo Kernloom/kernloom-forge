@@ -1,0 +1,53 @@
+apiVersion: kernloom.io/v1
+kind: CapabilityManifest
+metadata:
+  name: netfilter
+  version: "1.0"
+spec:
+  targetType: local_pep
+
+  # config_only: Kernloom generates nftables rules at compile time.
+  # There is no runtime PDP integration. For dynamic risk-based enforcement
+  # on Linux, use KLShield (kernloom_pdp_native) instead.
+  integrationMode: config_only
+
+  runtimeOwner: kernloom
+  configOwner: kernloom
+
+  ownership:
+    intentOwner: enterprise-pms
+    # Static config — no runtime signal collection after deployment.
+    runtimeContextOwner: kernloom
+    # Policy decisions are compile-time only; no runtime risk evaluation.
+    riskDecisionOwner: kernloom
+    runtimeDecisionOwner: kernloom
+    # nftables kernel tables hold the active rule state.
+    runtimeStateOwner: kernloom
+    # Policy evaluation is fully compile-time (Forge compiler).
+    policyEvaluationOwner: kernloom
+    enforcementOwner: kernloom
+    configOwner: kernloom
+
+  requirementCoverage:
+    subject_identity:  unsupported
+    resource_identity: partial
+    auth_strength:     unsupported
+    risk_level:        unsupported
+    device_posture:    unsupported
+    session_context:   unsupported
+    network_tuple:     full
+    custom:            unsupported
+
+  delegationNotes: {}
+
+  downgrades:
+    - requirement: resource_identity
+      from: >
+        Enterprise resource identity: application_group "investor-apps"
+        as a logical grouping with enterprise semantic meaning.
+      to: >
+        nftables IP/port set compiled from service inventory. Enterprise
+        app-group semantics are not preserved at the packet layer.
+      reason: >
+        netfilter understands only network tuples. The application_group must
+        be manually translated and kept in sync with service inventory.

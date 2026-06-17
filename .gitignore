@@ -41,9 +41,11 @@ Thumbs.db
 .vscode/
 *.iml
 
-# Claude AI working files (not part of the codebase)
-.claude/*
-.claude/CLAUDE.md
+# Claude AI working files — settings and archives excluded, docs tracked
+.claude/settings.local.json
+.claude/archive/
+.claude.zip
 
 # Local documentation drafts (not committed — use docs/ for committed docs)
 _docs/
+.claude.zip

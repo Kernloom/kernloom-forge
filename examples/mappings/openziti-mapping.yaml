@@ -1,0 +1,58 @@
+apiVersion: kernloom.io/v1
+kind: RequirementMapping
+metadata:
+  name: openziti-mapping
+  target: openziti
+spec:
+  version: "1.0"
+  rules:
+    - requirementKind: subject_identity
+      targetField: service_policy.identity_attributes
+      translationNote: >
+        Map subject role ref to an OpenZiti identity attribute tag.
+        E.g. role "investors" → identity attribute "#investors".
+        Service policy binds identities with this attribute to the target service.
+
+    - requirementKind: resource_identity
+      targetField: service_policy.service_refs
+      translationNote: >
+        Map application_group ref to one or more OpenZiti service names.
+        E.g. application_group "investor-apps" → OpenZiti services
+        ["investor-portal", "investor-reporting", "investor-data-api"].
+        An appwan or service policy groups these services.
+
+    - requirementKind: auth_strength
+      targetField: delegated
+      delegationMode: vendor_runtime
+      translationNote: >
+        MFA enforcement is delegated to the OpenZiti controller MFA posture
+        check. Kernloom validates that the MFA posture check is enabled on
+        the controller; per-policy assertion is not possible.
+
+    - requirementKind: risk_level
+      targetField: delegated
+      delegationMode: external_pip
+      translationNote: >
+        OpenZiti has no native risk scoring. Risk level must be supplied via
+        an external PIP (e.g. EDR posture check or SIEM signal injected into
+        OpenZiti custom posture check via API). This requirement is NOT
+        enforced by OpenZiti natively and must be tracked as unsupported
+        unless a custom posture check integration is in place.
+
+    - requirementKind: device_posture
+      targetField: posture_check.policy_refs
+      delegationMode: vendor_runtime
+      semanticDowngrade:
+        from: >
+          Enterprise device posture: healthy | degraded | unhealthy | unknown,
+          with EDR telemetry, patch status, encryption, configuration drift.
+        to: >
+          OpenZiti posture check pass/fail based on configured checks
+          (process presence, OS version, domain membership).
+        reason: >
+          OpenZiti posture checks are binary and configured with specific
+          criteria. Continuous health signals from EDR are not natively
+          consumed.
+      translationNote: >
+        Create an OpenZiti posture check set that approximates "healthy device".
+        Reference the posture check in the service policy.

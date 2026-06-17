@@ -1,0 +1,115 @@
+apiVersion: kernloom.io/v1
+kind: CapabilityManifest
+metadata:
+  name: klshield
+  version: "1.0"
+spec:
+  targetType: local_pep
+
+  # kernloom_pdp_native: Kernloom Runtime PDP is the sole in-path decision
+  # point. KLShield's eBPF programs are a pure enforcement layer with no
+  # independent policy logic. KLIQ acts as both PIP (local telemetry) and
+  # Runtime PDP (policy evaluation), driving KLShield via the action adapter.
+  integrationMode: kernloom_pdp_native
+
+  runtimeOwner: kernloom
+  configOwner: kernloom
+
+  ownership:
+    intentOwner: enterprise-pms
+    # KLIQ collects local eBPF telemetry (flow stats, connection events) and
+    # pulls external signals from EDR, IdP, and other PIPs.
+    runtimeContextOwner: kernloom-pips
+    # The Risk Engine (KLIQ local or Correlate central) aggregates signals
+    # into risk facts. Separate from the Runtime PDP that decides policy.
+    riskDecisionOwner: kernloom-risk-engine
+    # KLIQ evaluates enterprise policy and decides allow/deny/restrict.
+    runtimeDecisionOwner: kernloom-runtime-pdp
+    # Mutable local enforcement state (XDP/TC eBPF maps, rate limit buckets,
+    # classifier state) owned and managed by Kernloom's local agent.
+    runtimeStateOwner: kernloom
+    # Policy evaluation is fully Kernloom-owned. KLShield has no independent
+    # policy engine — it is a pure data-plane enforcement primitive.
+    policyEvaluationOwner: kernloom-runtime-pdp
+    enforcementOwner: kernloom
+    configOwner: kernloom
+
+  requirementCoverage:
+    # cgroup/UID process attribution provides local service identity but not
+    # enterprise user-role identity ("investors" role is an IdP/directory concept).
+    subject_identity:  partial
+    # IP/port sets as proxy for application_group — same structural limitation
+    # as netfilter, but cgroup context adds richer service attribution.
+    resource_identity: partial
+    # Token validation (MFA, OIDC, mTLS strength) is above the eBPF/XDP layer.
+    auth_strength:     unsupported
+    # KLIQ Risk Engine evaluates enterprise signals; KLShield enforces via
+    # TTL-bounded actions (deny_flow, rate_limit, block_cgroup).
+    risk_level:        runtime_action
+    # KLIQ evaluates device posture signals (EDR, MDM) and issues enforcement
+    # actions to KLShield when posture degrades below policy threshold.
+    device_posture:    runtime_action
+    # Session context (location, auth time) is above the kernel network layer.
+    session_context:   unsupported
+    # XDP/TC is KLShield's native enforcement primitive.
+    network_tuple:     full
+    custom:            unsupported
+
+  delegationNotes: {}
+
+  downgrades:
+    - requirement: subject_identity
+      from: >
+        Enterprise subject identity: role-based (e.g. "investors") from IdP,
+        representing a named human or service principal.
+      to: >
+        KLShield process/cgroup identity: UID, cgroup path, or PID of the
+        connecting process. Local service identity only.
+      reason: >
+        eBPF socket-level tracking identifies local processes but cannot access
+        enterprise role membership from IdP. For user-role enforcement, an IdP
+        or OpenZiti integration is required as the primary identity gate.
+
+    - requirement: resource_identity
+      from: >
+        Enterprise resource identity: application_group "investor-apps" as a
+        named logical grouping with enterprise semantic meaning.
+      to: >
+        KLShield destination match: IP/port set compiled from service inventory,
+        with optional cgroup correlation for service-to-service traffic.
+      reason: >
+        KLShield resolves resources to network tuples. The application_group must
+        be translated and kept in sync with service inventory.
+
+  runtimeActions:
+    - action: deny_flow
+      scope: flow
+      requiresTTL: true
+      autoRevert: true
+      note: >
+        XDP DROP or TC action: reject flows matching criteria (5-tuple, cgroup,
+        UID). Monotonically restrictive. Auto-reverts when TTL expires.
+
+    - action: rate_limit_flow
+      scope: flow
+      requiresTTL: true
+      autoRevert: true
+      note: >
+        TC policer: graduated rate limiting before hard deny. Used for
+        risk_level=medium where full denial is disproportionate.
+
+    - action: block_process_cgroup
+      scope: cgroup
+      requiresTTL: true
+      autoRevert: true
+      note: >
+        Block all network egress/ingress for a cgroup (process group).
+        Coarser than deny_flow; used when an entire process is risky.
+
+    - action: redirect_to_inspection
+      scope: flow
+      requiresTTL: true
+      autoRevert: true
+      note: >
+        TC redirect: divert flows to a local inspection or quarantine endpoint.
+        Allows observation before hard deny decisions are made.

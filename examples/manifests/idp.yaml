@@ -1,0 +1,62 @@
+apiVersion: kernloom.io/v1
+kind: CapabilityManifest
+metadata:
+  name: idp
+  version: "1.0"
+spec:
+  targetType: identity_system
+
+  # config_only: Kernloom configures IdP conditional access policies.
+  # The IdP owns all runtime context collection, risk evaluation at sign-in,
+  # authorization decisions, and enforcement via token issuance.
+  integrationMode: config_only
+
+  runtimeOwner: vendor
+  configOwner: kernloom
+
+  ownership:
+    intentOwner: enterprise-pms
+    runtimeContextOwner: vendor
+    # IdP evaluates its own risk signals at sign-in (Entra Identity Protection,
+    # Okta ThreatInsight). Enterprise EDR/SIEM risk is not natively consumed.
+    riskDecisionOwner: vendor
+    runtimeDecisionOwner: vendor
+    policyEvaluationOwner: vendor
+    enforcementOwner: vendor
+    configOwner: kernloom
+
+  requirementCoverage:
+    subject_identity:  full
+    resource_identity: full
+    auth_strength:     full
+    risk_level:        partial
+    device_posture:    partial
+    session_context:   full
+    network_tuple:     unsupported
+    custom:            unsupported
+
+  delegationNotes: {}
+
+  downgrades:
+    - requirement: risk_level
+      from: >
+        Enterprise risk level: continuous EDR/SIEM-driven composite score
+        evaluated near-continuously with multi-signal aggregation.
+      to: >
+        IdP sign-in risk: IdP-native signal at authentication time only
+        (low/medium/high based on IdP telemetry only).
+      reason: >
+        IdP risk signals are evaluated only at authentication time. Continuous
+        post-authentication risk from EDR or SIEM is not natively consumed
+        without custom claims injection. For near-runtime risk enforcement,
+        use idp-hybrid integration mode.
+
+    - requirement: device_posture
+      from: >
+        Enterprise device posture: healthy | degraded | unhealthy | unknown,
+        combining EDR health, patch status, encryption, and configuration drift.
+      to: >
+        IdP device compliance: compliant | not_compliant per MDM-reported status.
+      reason: >
+        IdP compliance reflects MDM-reported status only. Nuanced EDR signals
+        require custom claims injection.

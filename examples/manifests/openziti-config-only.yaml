@@ -1,0 +1,78 @@
+apiVersion: kernloom.io/v1
+kind: CapabilityManifest
+metadata:
+  name: openziti-config-only
+  version: "1.0"
+spec:
+  targetType: vendor_sub_control_plane
+
+  # config_only: Kernloom produces durable OpenZiti configuration (service
+  # policies, posture check requirements, AppWAN assignments). OpenZiti owns
+  # all runtime context collection, authorization decisions, and enforcement.
+  # No Kernloom runtime component is involved after config deployment.
+  integrationMode: config_only
+
+  # Shares the openziti requirement mapping (same adapter, different profile).
+  adapterRef: openziti
+
+  runtimeOwner: vendor
+  configOwner: kernloom
+
+  ownership:
+    intentOwner: enterprise-pms
+    runtimeContextOwner: vendor
+    # OpenZiti has no native enterprise risk scoring. Risk evaluation is
+    # absent in this integration mode — see risk_level downgrade note.
+    riskDecisionOwner: vendor
+    runtimeDecisionOwner: vendor
+    policyEvaluationOwner: vendor
+    enforcementOwner: vendor
+    configOwner: kernloom
+
+  requirementCoverage:
+    subject_identity:  full
+    resource_identity: full
+    auth_strength:     delegated
+    # OpenZiti has no native enterprise risk scoring. Posture checks serve as
+    # a structural proxy only — this is a semantic downgrade, not a true
+    # delegation. True delegation requires the vendor to evaluate an equivalent
+    # condition natively. See downgrade note below.
+    risk_level:        partial
+    device_posture:    partial
+    session_context:   unsupported
+    network_tuple:     unsupported
+    custom:            unsupported
+
+  delegationNotes:
+    auth_strength: >
+      MFA enforcement configured via OpenZiti MFA posture check on the
+      controller. Kernloom declares the requirement; OpenZiti evaluates it
+      at every dial attempt.
+
+  downgrades:
+    - requirement: risk_level
+      from: >
+        Enterprise risk level: continuous EDR/SIEM-driven composite score
+        (low/medium/high/critical) with multi-signal aggregation, evaluated
+        near-continuously against post-authentication access.
+      to: >
+        OpenZiti posture check: binary pass/fail on configured static criteria.
+        No EDR/SIEM signals are consumed. Risk changes take effect only in
+        the next configuration deployment cycle.
+      reason: >
+        OpenZiti has no native enterprise risk scoring. Posture checks can
+        approximate static device health but cannot represent continuous
+        risk signals. In config_only mode, dynamic risk enforcement requires
+        a deployment cycle; consider hybrid_out_of_band for near-runtime risk.
+
+    - requirement: device_posture
+      from: >
+        Enterprise posture: healthy | degraded | unhealthy | unknown,
+        aggregated from EDR, patch status, encryption, configuration drift.
+      to: >
+        OpenZiti posture check: pass | fail on configured static criteria
+        (process presence, OS version, domain membership, MAC address).
+      reason: >
+        OpenZiti posture checks are binary and static. Continuous EDR health
+        signals cannot be consumed directly. Posture check criteria must be
+        maintained and re-deployed when device requirements change.

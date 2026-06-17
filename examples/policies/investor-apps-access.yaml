@@ -1,0 +1,36 @@
+apiVersion: kernloom.io/v1
+kind: AccessPolicy
+metadata:
+  name: investor-apps-access
+  owner: security-architecture
+  environment: prod
+spec:
+  subject:
+    type: role
+    ref: investors
+  action: access
+  resource:
+    type: application_group
+    ref: investor-apps
+  conditions:
+    # CEL format — concise, directly usable by runtime PDPs
+    - id: require-mfa
+      type: authentication_strength
+      cel: "subject.auth_strength >= 'mfa'"
+
+    # Structured format — explicit fields, compiler derives CEL automatically
+    - id: require-low-risk
+      type: risk_level
+      signal: subject.risk.level
+      operator: eq
+      value: low
+
+    # Mixed format — both provided; CEL takes precedence for runtime evaluation
+    - id: require-healthy-device
+      type: device_posture
+      signal: device.posture.status
+      operator: eq
+      value: healthy
+      cel: "device.posture.status == 'healthy'"
+
+  effect: allow

@@ -1,0 +1,37 @@
+apiVersion: kernloom.io/v1
+kind: RequirementMapping
+metadata:
+  name: netfilter-mapping
+  target: netfilter
+spec:
+  version: "1.0"
+  rules:
+    - requirementKind: subject_identity
+      targetField: unsupported
+      translationNote: >
+        netfilter has no concept of enterprise user roles or identity.
+        UID-based socket matching for local services is possible but cannot
+        represent enterprise role semantics.
+
+    - requirementKind: resource_identity
+      targetField: nft_set.ip_daddr
+      semanticDowngrade:
+        from: >
+          Enterprise application_group "investor-apps": logical service group
+          with enterprise semantic meaning.
+        to: >
+          nftables set of destination IP addresses and ports for the services
+          that make up investor-apps.
+        reason: >
+          netfilter understands only network addresses and ports. The mapping
+          from application group to IP/port tuples must be maintained manually
+          and kept in sync with service inventory changes.
+      translationNote: >
+        Manually compile a set of destination IPs and ports for investor-apps.
+        Reference in nftables rule: ip daddr @investor-apps-dsts tcp dport @investor-apps-ports.
+
+    - requirementKind: network_tuple
+      targetField: nft_rule.match
+      translationNote: >
+        Network tuple conditions (IP ranges, ports, protocols) map directly
+        to nftables match expressions.
