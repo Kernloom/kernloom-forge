@@ -5,50 +5,48 @@ metadata:
   version: "1.0"
 spec:
   targetType: vendor_sub_control_plane
-
-  # hybrid_out_of_band: OpenZiti remains the in-path authorization owner on
-  # every connection dial. Kernloom's Risk Engine evaluates enterprise signals
-  # out-of-band and can issue TTL-bounded restrictions via the action adapter.
-  #
-  # This is NOT a synchronous per-connection gate. Kernloom does not intercept
-  # individual dials. The effective access is the intersection:
-  #   final_access = openziti_policy_allows AND NOT kernloom_restriction_active
-  #
-  # Decision timing:  near-runtime (minutes, not milliseconds)
-  # Decision path:    out-of-band (Management API, not dial path)
-  # Convergence:      eventual (OpenZiti state reflects the action after commit)
-  # In-path PDP:      OpenZiti Controller
   integrationMode: hybrid_out_of_band
-
   runtimeOwner: kernloom
   configOwner: kernloom
 
   ownership:
-    intentOwner: enterprise-pms
-    # Kernloom PIPs collect EDR, IdP, SIEM signals fed to the Risk Engine.
-    runtimeContextOwner: kernloom-pips
-    # The Risk Engine aggregates signals into a risk assessment (e.g. risk=high).
-    # Distinct from the Runtime PDP which makes the access decision.
-    riskDecisionOwner: kernloom-risk-engine
-    # The Runtime PDP evaluates the enterprise policy and decides to restrict
-    # (fires action adapter) or not. OpenZiti's own PDP is a separate layer.
-    runtimeDecisionOwner: kernloom-runtime-pdp
-    # OpenZiti controller holds identities, service policies, posture checks —
-    # the state that runtime actions modify.
-    runtimeStateOwner: vendor
-    # OpenZiti controller evaluates its own service policies on every dial.
-    # This evaluation is independent of Kernloom's out-of-band decision.
-    policyEvaluationOwner: vendor
-    # OpenZiti edge router enforces at the overlay network layer.
-    enforcementOwner: vendor
-    configOwner: kernloom
+    intent:
+      owner: kernloom
+      component: pms
+    runtimeContext:
+      owner: kernloom
+      component: pips
+    # Risk Engine aggregates EDR/SIEM signals into a risk fact.
+    # Distinct from the Runtime PDP which makes the policy decision.
+    riskDecision:
+      owner: kernloom
+      component: risk-engine
+    # Runtime PDP evaluates enterprise policy and decides to restrict or not.
+    # OpenZiti's controller is a separate, independent policy evaluation layer.
+    runtimeDecision:
+      owner: kernloom
+      component: runtime-pdp
+    # OpenZiti controller holds identities and service policies —
+    # the state that runtime actions modify via the Management API.
+    runtimeState:
+      owner: vendor
+      component: controller
+    # OpenZiti controller evaluates its own service policies on every dial,
+    # independently of Kernloom's out-of-band restriction decision.
+    policyEvaluation:
+      owner: vendor
+      component: controller
+    enforcement:
+      owner: vendor
+      component: edge-router
+    config:
+      owner: kernloom
+      component: pms
 
   requirementCoverage:
     subject_identity:  full
     resource_identity: full
     auth_strength:     delegated
-    # Kernloom Risk Engine evaluates enterprise risk signals (EDR, SIEM) and
-    # issues TTL-bounded restrictions to OpenZiti when risk exceeds threshold.
     risk_level:        runtime_action
     device_posture:    partial
     session_context:   unsupported
@@ -82,7 +80,7 @@ spec:
       note: >
         Temporarily disables the OpenZiti identity via Management API.
         All new dials are refused by the controller until TTL expires.
-        Monotonically restrictive: cannot be used to grant access.
+        Monotonically restrictive.
 
     - action: set_role_attribute
       scope: role_attribute
@@ -97,15 +95,12 @@ spec:
       scope: role_attribute
       requiresTTL: true
       autoRevert: true
-      note: >
-        Removes a role attribute, revoking access to services bound to it.
-        Auto-restored when TTL expires. Monotonically restrictive.
+      note: Removes a role attribute, revoking access to bound services. Monotonically restrictive.
 
     - action: activate_quarantine_service_policy
       scope: service_policy
       requiresTTL: true
       autoRevert: true
       note: >
-        Activates a pre-staged kernloom-quarantine service policy that restricts
-        the identity to a minimal or empty service set. Requires a pre-configured
-        quarantine policy in the OpenZiti controller (deployed by config adapter).
+        Activates a pre-staged kernloom-quarantine service policy. Requires
+        a pre-configured quarantine policy in the OpenZiti controller.

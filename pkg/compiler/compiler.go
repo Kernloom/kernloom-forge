@@ -188,7 +188,7 @@ func compileTarget(reqs *requirement.RequirementSet, ti TargetInput) targetResul
 			}
 			stateOwner := ""
 			if m.Spec.Ownership != nil {
-				stateOwner = m.Spec.Ownership.RuntimeStateOwner
+				stateOwner = m.Spec.Ownership.RuntimeState.String()
 			}
 			runtimeActions = append(runtimeActions, report.RuntimeActionEntry{
 				RequirementID:        req.ID,

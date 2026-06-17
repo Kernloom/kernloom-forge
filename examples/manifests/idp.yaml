@@ -5,25 +5,32 @@ metadata:
   version: "1.0"
 spec:
   targetType: identity_system
-
-  # config_only: Kernloom configures IdP conditional access policies.
-  # The IdP owns all runtime context collection, risk evaluation at sign-in,
-  # authorization decisions, and enforcement via token issuance.
   integrationMode: config_only
-
   runtimeOwner: vendor
   configOwner: kernloom
 
   ownership:
-    intentOwner: enterprise-pms
-    runtimeContextOwner: vendor
-    # IdP evaluates its own risk signals at sign-in (Entra Identity Protection,
-    # Okta ThreatInsight). Enterprise EDR/SIEM risk is not natively consumed.
-    riskDecisionOwner: vendor
-    runtimeDecisionOwner: vendor
-    policyEvaluationOwner: vendor
-    enforcementOwner: vendor
-    configOwner: kernloom
+    intent:
+      owner: kernloom
+      component: pms
+    runtimeContext:
+      owner: vendor
+      component: controller
+    riskDecision:
+      owner: vendor
+      component: controller
+    runtimeDecision:
+      owner: vendor
+      component: controller
+    policyEvaluation:
+      owner: vendor
+      component: controller
+    enforcement:
+      owner: vendor
+      component: token-service
+    config:
+      owner: kernloom
+      component: pms
 
   requirementCoverage:
     subject_identity:  full
@@ -40,23 +47,17 @@ spec:
   downgrades:
     - requirement: risk_level
       from: >
-        Enterprise risk level: continuous EDR/SIEM-driven composite score
-        evaluated near-continuously with multi-signal aggregation.
+        Enterprise risk level: continuous EDR/SIEM-driven composite score.
       to: >
-        IdP sign-in risk: IdP-native signal at authentication time only
-        (low/medium/high based on IdP telemetry only).
+        IdP sign-in risk: IdP-native signal at authentication time only.
       reason: >
-        IdP risk signals are evaluated only at authentication time. Continuous
-        post-authentication risk from EDR or SIEM is not natively consumed
-        without custom claims injection. For near-runtime risk enforcement,
-        use idp-hybrid integration mode.
+        IdP risk is evaluated only at authentication time. Continuous
+        post-authentication risk requires custom claims injection.
 
     - requirement: device_posture
       from: >
-        Enterprise device posture: healthy | degraded | unhealthy | unknown,
-        combining EDR health, patch status, encryption, and configuration drift.
+        Enterprise device posture: healthy combining EDR, patch, encryption, drift.
       to: >
         IdP device compliance: compliant | not_compliant per MDM-reported status.
       reason: >
-        IdP compliance reflects MDM-reported status only. Nuanced EDR signals
-        require custom claims injection.
+        IdP compliance reflects MDM status only. EDR nuance requires custom claims.

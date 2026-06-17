@@ -49,17 +49,17 @@ func openzitiVariantB() *capability.CapabilityManifest {
 		Spec: capability.ManifestSpec{
 			TargetType:      capability.TargetTypeVendorSubControlPlane,
 			IntegrationMode: capability.IntegrationModeHybridOutOfBand,
-			RuntimeOwner:    "kernloom-runtime-pdp",
-			ConfigOwner:     "kernloom",
+			RuntimeOwner:    capability.DomainKernloom,
+			ConfigOwner:     capability.DomainKernloom,
 			Ownership: &capability.OwnershipDeclaration{
-				IntentOwner:           "enterprise-pms",
-				RuntimeContextOwner:   "kernloom-pips",
-				RiskDecisionOwner:     "kernloom-runtime-pdp",
-				RuntimeDecisionOwner:  "kernloom-runtime-pdp",
-				RuntimeStateOwner:     "openziti",
-				PolicyEvaluationOwner: "openziti",
-				EnforcementOwner:      "openziti",
-				ConfigOwner:           "kernloom",
+				Intent:           capability.OwnerRef{Owner: capability.DomainKernloom, Component: capability.ComponentPMS},
+				RuntimeContext:   capability.OwnerRef{Owner: capability.DomainKernloom, Component: capability.ComponentPIPs},
+				RiskDecision:     capability.OwnerRef{Owner: capability.DomainKernloom, Component: capability.ComponentRiskEngine},
+				RuntimeDecision:  capability.OwnerRef{Owner: capability.DomainKernloom, Component: capability.ComponentRuntimePDP},
+				RuntimeState:     capability.OwnerRef{Owner: capability.DomainVendor, Component: capability.ComponentVendorController},
+				PolicyEvaluation: capability.OwnerRef{Owner: capability.DomainVendor, Component: capability.ComponentVendorController},
+				Enforcement:      capability.OwnerRef{Owner: capability.DomainVendor, Component: capability.ComponentVendorEdgeRouter},
+				Config:           capability.OwnerRef{Owner: capability.DomainKernloom, Component: capability.ComponentPMS},
 			},
 			RequirementCoverage: map[string]capability.CoverageLevel{
 				"subject_identity":  capability.CoverageFull,
@@ -109,13 +109,13 @@ func openzitiVariantA() *capability.CapabilityManifest {
 			RuntimeOwner:    "vendor",
 			ConfigOwner:     "kernloom",
 			Ownership: &capability.OwnershipDeclaration{
-				IntentOwner:           "enterprise-pms",
-				RuntimeContextOwner:   capability.OwnerVendor,
-				RiskDecisionOwner:     capability.OwnerVendor,
-				RuntimeDecisionOwner:  capability.OwnerVendor,
-				PolicyEvaluationOwner: capability.OwnerVendor,
-				EnforcementOwner:      capability.OwnerVendor,
-				ConfigOwner:           capability.OwnerKernloom,
+				Intent:           capability.OwnerRef{Owner: capability.DomainKernloom, Component: capability.ComponentPMS},
+				RuntimeContext:   capability.OwnerRef{Owner: capability.DomainVendor},
+				RiskDecision:     capability.OwnerRef{Owner: capability.DomainVendor},
+				RuntimeDecision:  capability.OwnerRef{Owner: capability.DomainVendor},
+				PolicyEvaluation: capability.OwnerRef{Owner: capability.DomainVendor, Component: capability.ComponentVendorController},
+				Enforcement:      capability.OwnerRef{Owner: capability.DomainVendor, Component: capability.ComponentVendorEdgeRouter},
+				Config:           capability.OwnerRef{Owner: capability.DomainKernloom, Component: capability.ComponentPMS},
 			},
 			RequirementCoverage: map[string]capability.CoverageLevel{
 				"subject_identity":  capability.CoverageFull,
@@ -187,11 +187,11 @@ func TestGoldenInvestorApps_VariantB(t *testing.T) {
 	// The runtime action entry should reference Kernloom as decision owner
 	for _, e := range reports.RuntimeActions.Entries {
 		if e.RequirementID == "require-low-risk" && e.TargetName == "openziti" {
-			if e.RuntimeDecisionOwner != "kernloom-runtime-pdp" {
-				t.Errorf("runtime action: RuntimeDecisionOwner = %q, want kernloom-runtime-pdp", e.RuntimeDecisionOwner)
+			if e.RuntimeDecisionOwner != "kernloom/runtime-pdp" {
+				t.Errorf("runtime action: RuntimeDecisionOwner = %q, want kernloom/runtime-pdp", e.RuntimeDecisionOwner)
 			}
-			if e.RuntimeStateOwner != "openziti" {
-				t.Errorf("runtime action: RuntimeStateOwner = %q, want openziti", e.RuntimeStateOwner)
+			if e.RuntimeStateOwner != "vendor/controller" {
+				t.Errorf("runtime action: RuntimeStateOwner = %q, want vendor/controller", e.RuntimeStateOwner)
 			}
 			if len(e.AvailableActions) == 0 {
 				t.Error("runtime action: AvailableActions must not be empty")

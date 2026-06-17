@@ -99,21 +99,59 @@ const (
 	IntegrationModeKernloomPDPNative IntegrationMode = "kernloom_pdp_native"
 )
 
-// OwnershipDeclaration maps each enforcement concern to its owner token.
-// All fields use canonical tokens from owner_tokens.go.
+// OwnerRef declares ownership of a single concern as domain + component.
 //
-// Risk Engine and Runtime PDP MUST be modelled separately:
-//   - riskDecisionOwner:    who aggregates signals into a risk assessment
-//   - runtimeDecisionOwner: who makes the access allow/deny/restrict decision
+//	owner:     the domain — DomainKernloom ("kernloom") or DomainVendor ("vendor")
+//	component: the functional primitive within that domain, e.g.:
+//	             kernloom: "pms", "pips", "risk-engine", "runtime-pdp", "ebpf-xdp"
+//	             vendor:   "controller", "edge-router", "token-service"
+//
+// Component may be omitted when the domain alone is sufficient (e.g. vendor
+// concerns where the specific component is not relevant to Kernloom).
+type OwnerRef struct {
+	Owner     string `yaml:"owner"`
+	Component string `yaml:"component,omitempty"`
+}
+
+// String returns "owner/component" or just "owner" when component is empty.
+func (o OwnerRef) String() string {
+	if o.Component != "" {
+		return o.Owner + "/" + o.Component
+	}
+	return o.Owner
+}
+
+// OwnershipDeclaration maps each enforcement concern to an OwnerRef.
+// Risk Engine and Runtime PDP MUST be declared separately:
+//
+//	PIPs → Risk Engine → Risk Assessment → Runtime PDP → Policy Decision
 type OwnershipDeclaration struct {
-	IntentOwner             string `yaml:"intentOwner"`
-	RuntimeContextOwner     string `yaml:"runtimeContextOwner"`
-	RiskDecisionOwner       string `yaml:"riskDecisionOwner"`
-	RuntimeDecisionOwner    string `yaml:"runtimeDecisionOwner"`
-	RuntimeStateOwner       string `yaml:"runtimeStateOwner,omitempty"`
-	PolicyEvaluationOwner   string `yaml:"policyEvaluationOwner"`
-	EnforcementOwner        string `yaml:"enforcementOwner"`
-	ConfigOwner             string `yaml:"configOwner"`
+	// Intent: who authors and versions the enterprise policy (always kernloom/pms).
+	Intent OwnerRef `yaml:"intent"`
+
+	// RuntimeContext: who collects signals and context at runtime.
+	RuntimeContext OwnerRef `yaml:"runtimeContext"`
+
+	// RiskDecision: who aggregates signals into a risk assessment.
+	// Distinct from RuntimeDecision — the risk engine produces facts,
+	// the runtime PDP makes the policy decision using those facts.
+	RiskDecision OwnerRef `yaml:"riskDecision"`
+
+	// RuntimeDecision: who makes the access allow/deny/restrict decision.
+	RuntimeDecision OwnerRef `yaml:"runtimeDecision"`
+
+	// RuntimeState: who holds the mutable state that runtime actions modify.
+	// Omit when not applicable (e.g. config-only targets).
+	RuntimeState OwnerRef `yaml:"runtimeState,omitempty"`
+
+	// PolicyEvaluation: who evaluates the concrete policy rules at access time.
+	PolicyEvaluation OwnerRef `yaml:"policyEvaluation"`
+
+	// Enforcement: who performs the actual allow/deny at the data plane.
+	Enforcement OwnerRef `yaml:"enforcement"`
+
+	// Config: who administers the durable configuration of the target.
+	Config OwnerRef `yaml:"config"`
 }
 
 // RuntimeActionDeclaration describes one TTL-bounded action the target's
@@ -185,11 +223,11 @@ func (m *CapabilityManifest) CoverageFor(kind string) CoverageLevel {
 	return CoverageUnsupported
 }
 
-// RuntimeDecisionOwner returns the effective runtime decision owner,
-// preferring the granular Ownership declaration.
+// RuntimeDecisionOwner returns the effective runtime decision owner as a
+// "domain/component" string, preferring the granular Ownership declaration.
 func (m *CapabilityManifest) RuntimeDecisionOwner() string {
-	if m.Spec.Ownership != nil && m.Spec.Ownership.RuntimeDecisionOwner != "" {
-		return m.Spec.Ownership.RuntimeDecisionOwner
+	if m.Spec.Ownership != nil && m.Spec.Ownership.RuntimeDecision.Owner != "" {
+		return m.Spec.Ownership.RuntimeDecision.String()
 	}
 	return m.Spec.RuntimeOwner
 }
