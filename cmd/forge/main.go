@@ -8,10 +8,14 @@
 //	forge compile --policy <file> --adapters <dir> --profiles <dir> [--output summary|yaml]
 //	forge validate --policy <file>
 //	forge validate-adapter --adapter <file>
+//	forge serve --addr :8443 [--adapters <dir>] [--profiles <dir>]
 package main
 
 import (
+	"context"
 	"fmt"
+	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,6 +23,7 @@ import (
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 
+	"github.com/kernloom/kernloom-forge/internal/api"
 	"github.com/kernloom/kernloom-forge/pkg/compiler"
 	"github.com/kernloom/kernloom-forge/pkg/core/action"
 	"github.com/kernloom/kernloom-forge/pkg/core/adapter"
@@ -36,11 +41,49 @@ func main() {
 	root.AddCommand(compileCmd())
 	root.AddCommand(validateCmd())
 	root.AddCommand(validateAdapterCmd())
+	root.AddCommand(serveCmd())
 
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+// serveCmd: forge serve --addr :8443
+func serveCmd() *cobra.Command {
+	var addr, adaptersDir, profilesDir string
+
+	cmd := &cobra.Command{
+		Use:   "serve",
+		Short: "Run the Forge control-plane API server",
+		Example: `  forge serve --addr :8443 \
+    --adapters examples/adapters/ \
+    --profiles examples/profiles/`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			srvLog := log.New(os.Stderr, "[forge-api] ", log.LstdFlags)
+
+			// Bundle provider: loads adapter+profile files and returns a compiled
+			// signed bundle. For the MVP we use a stub key pair (no persistent key).
+			var provider api.BundleProvider
+			if adaptersDir != "" && profilesDir != "" {
+				provider = func(ctx context.Context, nodeID string) ([]byte, error) {
+					// MVP: return a placeholder JSON bundle so KLIQ can pull something.
+					// Phase 2: compile a real signed bundle from adapters+profiles.
+					srvLog.Printf("bundle request node=%s (stub provider)", nodeID)
+					return []byte(`{"apiVersion":"kernloom.io/managed/v1alpha1","kind":"RuntimeBundle","metadata":{"node_id":"` + nodeID + `","generation":1}}`), nil
+				}
+			}
+
+			srv := api.NewServer(provider, srvLog)
+			srvLog.Printf("forge API server listening on %s", addr)
+			return http.ListenAndServe(addr, srv.Handler())
+		},
+	}
+
+	cmd.Flags().StringVar(&addr, "addr", ":8443", "listen address")
+	cmd.Flags().StringVar(&adaptersDir, "adapters", "", "adapters directory (optional, enables bundle generation)")
+	cmd.Flags().StringVar(&profilesDir, "profiles", "", "profiles directory (optional, enables bundle generation)")
+	return cmd
 }
 
 // compileCmd: forge compile --policy <file> --adapters <dir> --profiles <dir>
