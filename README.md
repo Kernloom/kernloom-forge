@@ -141,7 +141,10 @@ spec:
   conditions:
     - id: require-mfa
       type: authentication_strength
-      cel: "subject.auth_strength >= 'mfa'"
+      signal: session.authentication.strength
+      operator: eq
+      value: mfa
+      cel: "session.authentication.strength == 'mfa'"
     - id: require-low-risk
       type: risk_level
       signal: subject.risk.level
@@ -150,7 +153,53 @@ spec:
   effect: allow
 ```
 
-Conditions support both CEL expressions and structured `signal/operator/value` format.
+Conditions support both CEL expressions and structured `signal/operator/value`
+format. The policy kind, selectors, condition types, operators and effects are
+defined by `github.com/kernloom/kernloom-registries/registries/policy`.
+
+### Natural policy intent
+
+A natural authoring layer can be added above `AccessPolicy`, but Forge still
+needs the canonical YAML before planning:
+
+```text
+protect "ziti-controller"
+allow group "kernloom-admins" to access "ziti-controller"
+require "subject.risk.level" eq "low"
+require "session.authentication.strength" in ["mfa", "phishing_resistant_mfa"]
+default deny access to "ziti-controller"
+when denied access to "ziti-controller" exceeds 5 within 15m then alert
+never auto_block group "kernloom-admins"
+```
+
+Quotes are optional around simple variable values and useful to show which
+tokens are data rather than language.
+
+`alert` is a natural alias for the canonical observe action
+`observe.signal.emit`. Other standard response actions include
+`rate_limit`, `deny`, `network_deny`, `drop`, `tarpit`, and `quarantine`, or
+their canonical IDs from the registry.
+
+Compile that text to YAML:
+
+```bash
+./bin/forge intent convert \
+  --input examples/policies/protect-ziti-controller.intent \
+  --output /tmp/protect-ziti-controller.yaml \
+  --owner security
+```
+
+That YAML can then move through:
+
+1. an `AccessPolicy` YAML document for the access intent;
+2. an `EnforcementPlan` for operator review;
+3. a `RuntimePolicyPack` for standalone KLIQ via `export-runtime-policy`;
+4. a signed `RuntimeBundle` for managed KLIQ via `build-runtime-bundle` or
+   `serve`.
+
+The importer is a thin parser/converter, not a second policy model. Lines such
+as `when ... then ...` and `never ...` are accepted as intent text but currently
+reported as warnings until response-policy and guardrail schemas are added.
 
 ### Five-object adapter model
 

@@ -136,7 +136,7 @@ func investorAppsPolicy() *intent.AccessPolicy {
 			Effect:   "allow",
 			Conditions: []intent.Condition{
 				{ID: "require-mfa", Type: "authentication_strength",
-					Signal: "subject.auth_strength", Operator: "gte", Value: "mfa"},
+					Signal: "session.authentication.strength", Operator: "eq", Value: "mfa"},
 				{ID: "require-low-risk", Type: "risk_level",
 					Signal: "subject.risk.level", Operator: "eq", Value: "low"},
 				{ID: "require-healthy-device", Type: "device_posture",

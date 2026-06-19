@@ -35,8 +35,8 @@ import (
 //	  conditions:
 //	    - id: require-mfa
 //	      type: authentication_strength
-//	      signal: subject.auth_strength
-//	      operator: gte
+//	      signal: session.authentication.strength
+//	      operator: eq
 //	      value: mfa
 //	  effect: allow
 type AccessPolicy struct {
@@ -66,7 +66,8 @@ type Subject struct {
 }
 
 // Resource identifies what the policy protects.
-// type: application_group | service | endpoint | data_class | any
+// type: application | application_group | api | service | endpoint | database |
+// storage | secret | network_segment | infrastructure_asset | any
 type Resource struct {
 	Type string `yaml:"type"`
 	Ref  string `yaml:"ref,omitempty"`
@@ -80,8 +81,8 @@ type Resource struct {
 //
 //   - id: require-mfa
 //     type: authentication_strength
-//     signal: subject.auth_strength
-//     operator: gte
+//     signal: session.authentication.strength
+//     operator: eq
 //     value: mfa
 //
 // CEL format — a single expression, more concise and directly usable by
@@ -89,7 +90,7 @@ type Resource struct {
 //
 //   - id: require-mfa
 //     type: authentication_strength
-//     cel: "subject.auth_strength >= 'mfa'"
+//     cel: "session.authentication.strength == 'mfa'"
 //
 // Both formats may be provided simultaneously. When only the structured form
 // is present, CelExpr() derives the equivalent CEL expression automatically.

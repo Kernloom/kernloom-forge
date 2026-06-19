@@ -41,7 +41,7 @@ type Requirement struct {
 	// Kind classifies the requirement for fast capability matching.
 	Kind string
 
-	// Signal is the dot-notation context path, e.g. "subject.auth_strength".
+	// Signal is the dot-notation context path, e.g. "session.authentication.strength".
 	// May be empty when the condition was specified in CEL-only form.
 	Signal string
 
@@ -174,7 +174,7 @@ func kindFromType(t string) string {
 // This is the fallback when the type field is absent or unrecognised.
 func kindFromSignal(signal string) string {
 	switch {
-	case strings.HasPrefix(signal, "subject.auth"):
+	case strings.HasPrefix(signal, "subject.auth"), strings.HasPrefix(signal, "session.authentication"):
 		return KindAuthStrength
 	case strings.HasPrefix(signal, "subject.risk"):
 		return KindRiskLevel

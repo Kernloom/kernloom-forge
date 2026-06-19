@@ -43,6 +43,7 @@ func main() {
 		Short: "Kernloom policy compiler — translates enterprise intent into enforcement plans",
 	}
 	root.AddCommand(compileCmd())
+	root.AddCommand(intentCmd())
 	root.AddCommand(validateCmd())
 	root.AddCommand(validateAdapterCmd())
 	root.AddCommand(exportRuntimePolicyCmd())

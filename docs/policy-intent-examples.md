@@ -23,6 +23,123 @@ Important: `forge compile --output yaml` creates an `EnforcementPlan`, not a
 file for `kliq --policy-file`. For standalone KLIQ, always use
 `forge export-runtime-policy`.
 
+## Natural Intent To Runtime Path
+
+Kernloom may offer a natural policy authoring layer, but it should compile to
+canonical `AccessPolicy` YAML before Forge plans anything.
+
+Natural authoring form:
+
+```text
+protect "ziti-controller"
+allow group "kernloom-admins" to access "ziti-controller"
+require "subject.risk.level" eq "low"
+require "session.authentication.strength" in ["mfa", "phishing_resistant_mfa"]
+default deny access to "ziti-controller"
+when denied access to "ziti-controller" exceeds 5 within 15m then alert
+never auto_block group "kernloom-admins"
+```
+
+Quotes around variable values are optional for simple IDs and recommended for
+readability. They are required when a subject, resource or environment contains
+spaces, punctuation that would confuse tokenization, or a word that also exists
+as a policy keyword.
+
+Canonical YAML shape after conversion:
+
+```yaml
+apiVersion: kernloom.io/v1
+kind: AccessPolicy
+metadata:
+  name: protect-ziti-controller
+  owner: security
+spec:
+  subject:
+    type: group
+    ref: kernloom-admins
+  action: access
+  resource:
+    type: endpoint
+    ref: ziti-controller
+  conditions:
+    - id: require-subject-risk-level
+      type: risk_level
+      signal: subject.risk.level
+      operator: eq
+      value: low
+    - id: require-session-authentication-strength
+      type: authentication_strength
+      signal: session.authentication.strength
+      operator: in
+      value:
+        - mfa
+        - phishing_resistant_mfa
+  effect: allow
+```
+
+The natural lines map like this:
+
+| Natural line | Canonical result |
+|---|---|
+| `protect "ziti-controller"` | `resource.type: endpoint`, `resource.ref: ziti-controller` |
+| `allow group "kernloom-admins" to access "ziti-controller"` | `subject.type: group`, `subject.ref: kernloom-admins`, `action: access`, `effect: allow` |
+| `require "subject.risk.level" eq "low"` | `conditions[]` entry with `type: risk_level`, `signal: subject.risk.level`, `operator: eq`, `value: low` |
+| `require "session.authentication.strength" in [...]` | `conditions[]` entry with `type: authentication_strength` and list value |
+| `default deny access to "ziti-controller"` | Target default deny or `RuntimePolicyPack.spec.default_effect: deny` |
+| `when denied access to "ziti-controller" exceeds 5 within 15m then alert` | Response rule trigger: denied access count over threshold within a time window, with `alert` as alias for `observe.signal.emit` |
+| `never auto_block group "kernloom-admins"` | Safety guardrail that caps runtime action selection for that group |
+
+Multiple `when ... then ...` statements are fine. The current
+`RuntimePolicyPack` contract has one `when` and one `then` per rule. If a
+natural policy lists several actions for the same condition, Forge should expand
+that into several generated rules with the same `when`.
+
+Convert the natural form into canonical YAML:
+
+```bash
+./bin/forge intent convert \
+  --input examples/policies/protect-ziti-controller.intent \
+  --output /tmp/kernloom-forge-manual/policies/protect-ziti-controller.yaml \
+  --owner security
+```
+
+The converter writes warnings for lines that are understood but not emitted into
+`AccessPolicy` yet, such as `when ... then ...`, `never ...`, and `default deny`.
+Those lines are later represented in target defaults, RuntimePolicyPack rules,
+or guardrail policy once the matching schema exists.
+
+`alert` is not the only possible response action. Natural intent may use short
+aliases for standard action/capability IDs:
+
+| Natural action | Canonical ID |
+|---|---|
+| `alert` | `observe.signal.emit` |
+| `finding` | `export.finding` |
+| `rate_limit` | `enforce.network.rate_limit` |
+| `connection_limit` | `enforce.traffic.connection_limit` |
+| `bandwidth_limit` | `enforce.traffic.bandwidth_limit` |
+| `syn_protect` | `enforce.network.syn_protect` |
+| `deny` or `block` | `enforce.access.deny` |
+| `network_deny` | `enforce.network.deny` |
+| `drop` | `enforce.traffic.drop` |
+| `tarpit` | `enforce.traffic.tarpit` |
+| `quarantine` | `enforce.network.quarantine` |
+
+Canonical action IDs may also be written directly, for example
+`then enforce.traffic.drop for 5m`. Runtime-enforcement actions must still obey
+the registry contract: TTL bounded, leased, audited, auto-reverting, and within
+the target profile's allowed action level.
+
+Current status: Forge accepts the converted canonical YAML form for
+`validate`, `compile`, `report`, `export-runtime-policy`, and
+`build-runtime-bundle`.
+
+Example files:
+
+- `examples/policies/protect-ziti-controller.intent`: natural authoring example.
+- `examples/policies/protect-ziti-controller.yaml`: converted YAML that Forge can
+  validate and compile today.
+
 ## Setup
 
 ```bash
@@ -82,8 +199,11 @@ Registry terms used here:
 
 | Field | Registry |
 |---|---|
-| `subject.type: role` | Forge intent selector; later mapped to canonical subjects |
-| `resource.type: service` | Entity/taxonomy vocabulary |
+| `kind: AccessPolicy` | Policy Kind Registry |
+| `subject.type: role` | AccessPolicy selector; later mapped to canonical subjects |
+| `resource.type: service` | AccessPolicy schema + Entity Taxonomy |
+| `conditions[].type` | Policy Condition Type Registry |
+| `conditions[].operator` | Policy Operator Registry |
 | `subject.risk.level` | Context Key + Risk Taxonomy |
 | `device.posture.status` | Context Key |
 | `low`, `healthy`, `unknown` | Allowed canonical values |

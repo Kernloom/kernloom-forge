@@ -1,0 +1,11 @@
+# Natural policy intent example.
+# This is an authoring/import surface. Convert it to AccessPolicy YAML before
+# running forge validate/compile/export-runtime-policy.
+
+protect "ziti-controller"
+allow group "kernloom-admins" to access "ziti-controller"
+require "subject.risk.level" eq "low"
+require "session.authentication.strength" in ["mfa", "phishing_resistant_mfa"]
+default deny access to "ziti-controller"
+when denied access to "ziti-controller" exceeds 5 within 15m then alert
+never auto_block group "kernloom-admins"

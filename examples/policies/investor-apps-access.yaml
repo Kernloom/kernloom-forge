@@ -3,7 +3,7 @@ kind: AccessPolicy
 metadata:
   name: investor-apps-access
   owner: security-architecture
-  environment: prod
+  environment: production
 spec:
   subject:
     type: role
@@ -16,7 +16,10 @@ spec:
     # CEL format — concise, directly usable by runtime PDPs
     - id: require-mfa
       type: authentication_strength
-      cel: "subject.auth_strength >= 'mfa'"
+      signal: session.authentication.strength
+      operator: eq
+      value: mfa
+      cel: "session.authentication.strength == 'mfa'"
 
     # Structured format — explicit fields, compiler derives CEL automatically
     - id: require-low-risk
