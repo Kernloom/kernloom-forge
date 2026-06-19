@@ -15,9 +15,9 @@ import (
 	"time"
 
 	contracts "github.com/kernloom/kernloom-contracts"
-	registries "github.com/kernloom/kernloom-registries"
 	"github.com/kernloom/kernloom-forge/pkg/core/plan"
 	"github.com/kernloom/kernloom-forge/pkg/core/profile"
+	registries "github.com/kernloom/kernloom-registries"
 )
 
 const (

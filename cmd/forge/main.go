@@ -127,8 +127,8 @@ func serveCmd() *cobra.Command {
 			}
 
 			srv := api.NewServerWithOptions(provider, srvLog, api.ServerOptions{
-				EnrollTokens:          enrollTokens,
-				RequireAuth:           true,
+				EnrollTokens:         enrollTokens,
+				RequireAuth:          true,
 				EnrollTokenValidator: tokenValidator,
 			})
 			srvLog.Printf("forge API server listening on %s", addr)

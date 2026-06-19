@@ -180,10 +180,10 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"node_id":      req.NodeID,
-		"status":       "approved",
+		"node_id":       req.NodeID,
+		"status":        "approved",
 		"session_token": sessionToken,
-		"enrolled_at":  time.Now().UTC().Format(time.RFC3339),
+		"enrolled_at":   time.Now().UTC().Format(time.RFC3339),
 		"expires_at":    session.ExpiresAt.Format(time.RFC3339),
 	})
 }
