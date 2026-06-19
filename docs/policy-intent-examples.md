@@ -23,10 +23,14 @@ Important: `forge compile --output yaml` creates an `EnforcementPlan`, not a
 file for `kliq --policy-file`. For standalone KLIQ, always use
 `forge export-runtime-policy`.
 
-## Natural Intent To Runtime Path
+## Natural Intent To AccessPolicy Path
 
 Kernloom may offer a natural policy authoring layer, but it should compile to
-canonical `AccessPolicy` YAML before Forge plans anything.
+canonical `AccessPolicy` YAML before Forge plans anything. Today,
+`forge intent convert` emits only the access policy part. Response and guardrail
+lines such as `when ... then ...`, `default deny ...`, and `never ...` are
+recognized and reported as warnings, but are not written into the `AccessPolicy`
+YAML yet.
 
 Natural authoring form:
 
@@ -45,7 +49,7 @@ readability. They are required when a subject, resource or environment contains
 spaces, punctuation that would confuse tokenization, or a word that also exists
 as a policy keyword.
 
-Canonical YAML shape after conversion:
+AccessPolicy YAML shape after today's conversion:
 
 ```yaml
 apiVersion: kernloom.io/v1
@@ -85,14 +89,35 @@ The natural lines map like this:
 | `allow group "kernloom-admins" to access "ziti-controller"` | `subject.type: group`, `subject.ref: kernloom-admins`, `action: access`, `effect: allow` |
 | `require "subject.risk.level" eq "low"` | `conditions[]` entry with `type: risk_level`, `signal: subject.risk.level`, `operator: eq`, `value: low` |
 | `require "session.authentication.strength" in [...]` | `conditions[]` entry with `type: authentication_strength` and list value |
-| `default deny access to "ziti-controller"` | Target default deny or `RuntimePolicyPack.spec.default_effect: deny` |
-| `when denied access to "ziti-controller" exceeds 5 within 15m then alert` | Response rule trigger: denied access count over threshold within a time window, with `alert` as alias for `observe.signal.emit` |
-| `never auto_block group "kernloom-admins"` | Safety guardrail that caps runtime action selection for that group |
+| `default deny access to "ziti-controller"` | Recognized today, warning only. Later: target default deny or `RuntimePolicyPack.spec.default_effect: deny` |
+| `when denied access to "ziti-controller" exceeds 5 within 15m then alert` | Recognized today, warning only. Later: response rule trigger with `alert` as alias for `observe.signal.emit` |
+| `never auto_block group "kernloom-admins"` | Recognized today, warning only. Later: safety guardrail that caps runtime action selection for that group |
 
 Multiple `when ... then ...` statements are fine. The current
 `RuntimePolicyPack` contract has one `when` and one `then` per rule. If a
 natural policy lists several actions for the same condition, Forge should expand
 that into several generated rules with the same `when`.
+
+The future response-rule output would be a separate runtime artifact, not part
+of the `AccessPolicy` above. Conceptually, the example `when` line would become
+something like:
+
+```yaml
+kind: RuntimePolicyPack
+spec:
+  rules:
+    - id: denied-access-ziti-controller-alert
+      when: "metrics.access.denied_count > 5 && window == '15m' && resource.ref == 'ziti-controller'"
+      then:
+        capability: observe.signal.emit
+        level: observe
+      reason_codes:
+        - denied_access_threshold_exceeded
+```
+
+That exact CEL/fact shape is not final yet. It needs the response-rule IR,
+runtime fact registry, and compiler priority work described in Kernloom
+technical debt.
 
 Convert the natural form into canonical YAML:
 
@@ -105,8 +130,8 @@ Convert the natural form into canonical YAML:
 
 The converter writes warnings for lines that are understood but not emitted into
 `AccessPolicy` yet, such as `when ... then ...`, `never ...`, and `default deny`.
-Those lines are later represented in target defaults, RuntimePolicyPack rules,
-or guardrail policy once the matching schema exists.
+Those lines are later represented in target defaults, RuntimePolicyPack
+response rules, or guardrail policy once the matching schema exists.
 
 `alert` is not the only possible response action. Natural intent may use short
 aliases for standard action/capability IDs:
