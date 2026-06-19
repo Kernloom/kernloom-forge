@@ -121,8 +121,9 @@ func compileRequirement(
 	bundle *TargetBundle,
 ) plan.RequirementEnforcement {
 	entry := plan.RequirementEnforcement{
-		ID:          req.ID,
-		Requirement: req.CEL,
+		ID:              req.ID,
+		RequirementKind: req.Kind,
+		Requirement:     req.CEL,
 	}
 
 	// No bundle → everything is unsupported.

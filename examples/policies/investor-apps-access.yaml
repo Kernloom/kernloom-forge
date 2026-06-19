@@ -33,4 +33,20 @@ spec:
       value: healthy
       cel: "device.posture.status == 'healthy'"
 
+  enforcementConstraints:
+    allowDelegation: true
+    allowSemanticDowngrade: true
+    minimumFidelity: medium
+    allowedDelegationOwners:
+      - openziti-controller
+    allowedRuntimeActions:
+      - remove_kernloom_access_attribute
+      - identity.disable
+      - network.flow_deny
+      - network.flow_rate_limit
+    requireApprovalFor:
+      - semantic_downgrade
+      - runtime_delegation
+      - runtime_action
+
   effect: allow

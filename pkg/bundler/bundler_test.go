@@ -4,16 +4,134 @@
 package bundler_test
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
-	"github.com/kernloom/kernloom-forge/internal/signing"
+	contracts "github.com/kernloom/kernloom-contracts"
 	"github.com/kernloom/kernloom-forge/pkg/bundler"
 	"github.com/kernloom/kernloom-forge/pkg/core/plan"
 	"github.com/kernloom/kernloom-forge/pkg/core/profile"
+	"gopkg.in/yaml.v3"
 )
 
-// testProfile is a minimal enterprise_risk_overlay profile.
+func TestBuildPolicyPackUsesKLIQContracts(t *testing.T) {
+	pack, err := bundler.BuildPolicyPack(testEnforcementPlan(), testProfile(), bundler.RuntimePolicyConfig{
+		IssuedAt:   fixedNow(),
+		DefaultTTL: time.Minute,
+	})
+	if err != nil {
+		t.Fatalf("BuildPolicyPack: %v", err)
+	}
+	if pack.APIVersion != contracts.RuntimeAPIVersion || pack.Kind != contracts.KindRuntimePolicyPack {
+		t.Fatalf("unexpected TypeMeta: %#v", pack.TypeMeta)
+	}
+	if len(pack.Spec.Rules) != 1 {
+		t.Fatalf("rules = %d, want 1", len(pack.Spec.Rules))
+	}
+	rule := pack.Spec.Rules[0]
+	if rule.When != "risk.level in ['high', 'critical']" {
+		t.Fatalf("when = %q", rule.When)
+	}
+	if rule.Then.Capability != "enforce.access.deny" || rule.Then.Level != "block" {
+		t.Fatalf("action = %#v", rule.Then)
+	}
+	if rule.Then.TTL.Duration != time.Minute {
+		t.Fatalf("ttl = %s", rule.Then.TTL.Duration)
+	}
+}
+
+func TestBuildPolicyPackYAMLIsLoadableByKLIQShape(t *testing.T) {
+	pack, err := bundler.BuildPolicyPack(testEnforcementPlan(), testProfile(), bundler.RuntimePolicyConfig{
+		IssuedAt:   fixedNow(),
+		DefaultTTL: time.Minute,
+	})
+	if err != nil {
+		t.Fatalf("BuildPolicyPack: %v", err)
+	}
+	raw, err := yaml.Marshal(pack)
+	if err != nil {
+		t.Fatalf("yaml.Marshal: %v", err)
+	}
+	text := string(raw)
+	for _, needle := range []string{"apiVersion:", "kind: RuntimePolicyPack", "capabilities_required:", "ttl: 1m0s"} {
+		if !strings.Contains(text, needle) {
+			t.Fatalf("YAML missing %q:\n%s", needle, text)
+		}
+	}
+}
+
+func TestBuildProducesSignedContractsBundle(t *testing.T) {
+	pub, priv := keypair(t)
+	b, err := bundler.Build(testEnforcementPlan(), testProfile(), testBundleConfig(), priv)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if b.APIVersion != contracts.RuntimeAPIVersion || b.Kind != contracts.KindRuntimeBundle {
+		t.Fatalf("unexpected bundle TypeMeta: %#v", b.TypeMeta)
+	}
+	if b.Signature.Value == "" {
+		t.Fatal("bundle is not signed")
+	}
+	if b.Spec.RuntimePolicyPack.Kind != contracts.KindRuntimePolicyPack {
+		t.Fatalf("embedded pack kind = %q", b.Spec.RuntimePolicyPack.Kind)
+	}
+	if b.Spec.RegistrySnapshot.Ref.Name == "" || b.Spec.RegistrySnapshot.Ref.Digest == "" {
+		t.Fatalf("registry snapshot was not embedded: %#v", b.Spec.RegistrySnapshot.Ref)
+	}
+	if err := contracts.VerifyRuntimeBundle(b, pub, fixedNow()); err != nil {
+		t.Fatalf("VerifyRuntimeBundle: %v", err)
+	}
+}
+
+func TestVerifyRejectsTamperedBundle(t *testing.T) {
+	pub, priv := keypair(t)
+	b, err := bundler.Build(testEnforcementPlan(), testProfile(), testBundleConfig(), priv)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	b.Spec.RuntimePolicyPack.Spec.Rules[0].When = "risk.level == 'low'"
+	if err := bundler.Verify(b, pub, fixedNow()); err == nil {
+		t.Fatal("Verify should reject tampered bundle")
+	}
+}
+
+func TestContractsBundleJSONRoundTrip(t *testing.T) {
+	_, priv := keypair(t)
+	b, err := bundler.Build(testEnforcementPlan(), testProfile(), testBundleConfig(), priv)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	raw, err := json.Marshal(b)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	var decoded contracts.RuntimeBundle
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+	if decoded.Metadata.NodeID != "node-edge-01" || decoded.Spec.RuntimePolicyPack.Kind != contracts.KindRuntimePolicyPack {
+		t.Fatalf("decoded bundle mismatch: %#v", decoded)
+	}
+}
+
+func TestVerifyNotExpired(t *testing.T) {
+	_, priv := keypair(t)
+	b, err := bundler.Build(testEnforcementPlan(), testProfile(), testBundleConfig(), priv)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if err := bundler.VerifyNotExpired(b, fixedNow().Add(time.Hour)); err != nil {
+		t.Fatalf("VerifyNotExpired: %v", err)
+	}
+	if err := bundler.VerifyNotExpired(b, fixedNow().Add(48*time.Hour)); err == nil {
+		t.Fatal("VerifyNotExpired should reject expired bundle")
+	}
+}
+
 func testProfile() *profile.TargetIntegrationProfile {
 	return &profile.TargetIntegrationProfile{
 		APIVersion: "kernloom.io/v1alpha1",
@@ -34,15 +152,11 @@ func testProfile() *profile.TargetIntegrationProfile {
 					RequireAutoRevert: true,
 				},
 			},
-			AllowedRuntimeActions: []string{
-				"remove_kernloom_access_attribute",
-				"identity.disable",
-			},
+			AllowedRuntimeActions: []string{"remove_kernloom_access_attribute"},
 		},
 	}
 }
 
-// testEnforcementPlan simulates a compiler output with one compensating_control entry.
 func testEnforcementPlan() *plan.EnforcementPlan {
 	return &plan.EnforcementPlan{
 		APIVersion: "kernloom.io/v1alpha1",
@@ -51,68 +165,25 @@ func testEnforcementPlan() *plan.EnforcementPlan {
 			Name:         "investor-apps-openziti-production",
 			SourcePolicy: "investor-apps-access",
 			Target:       "openziti-production",
-			CompiledAt:   time.Now().UTC(),
+			CompiledAt:   fixedNow(),
 		},
 		Spec: plan.EnforcementPlanSpec{
-			Requirements: []plan.RequirementEnforcement{
-				{
-					ID:              "subject-identity",
-					RequirementKind: "subject_identity",
-					Status:          plan.StatusImplemented,
-					Capability:      "identity.role_attributes",
-					Fidelity:        "high",
+			Requirements: []plan.RequirementEnforcement{{
+				ID:              "require-low-risk",
+				RequirementKind: "risk_level",
+				Requirement:     "subject.risk.level == 'low'",
+				Status:          plan.StatusCompensatingControl,
+				ActionBinding: &plan.ActionBinding{
+					Action:        "remove_kernloom_access_attribute",
+					Attribute:     "kl.access.active",
+					DecisionOwner: "kernloom-runtime-pdp",
 				},
-				{
-					ID:              "resource-identity",
-					RequirementKind: "resource_identity",
-					Status:          plan.StatusImplemented,
-					Capability:      "resource.service_definition",
-					Fidelity:        "high",
-				},
-				{
-					ID:              "require-mfa",
-					RequirementKind: "auth_strength",
-					Requirement:     "subject.auth_strength >= 'mfa'",
-					Status:          plan.StatusDelegated,
-					Delegation: &plan.DelegationNote{
-						EvaluationOwner: "openziti-controller",
-					},
-				},
-				{
-					ID:              "require-low-risk",
-					RequirementKind: "risk_level",
-					Requirement:     "subject.risk.level == 'low'",
-					Status:          plan.StatusCompensatingControl,
-					ActionBinding: &plan.ActionBinding{
-						Action:        "remove_kernloom_access_attribute",
-						Attribute:     "kl.access.active",
-						MaxTTL:        "30m",
-						DecisionOwner: "kernloom-runtime-pdp",
-					},
-					Ownership: &plan.RequirementOwnership{
-						RiskAssessmentOwner:      "kernloom-risk-engine",
-						EnterpriseDecisionOwner:  "kernloom-runtime-pdp",
-						TargetAuthorizationOwner: "openziti-controller",
-						EnforcementOwner:         "openziti-edge-router",
-					},
-				},
-				{
-					ID:              "require-healthy-device",
-					RequirementKind: "device_posture",
-					Status:          plan.StatusPartial,
-					Downgrade: &plan.DowngradeNote{
-						From:   "Enterprise posture: healthy",
-						To:     "OpenZiti posture check: binary pass/fail",
-						Reason: "OpenZiti posture checks are binary and static",
-					},
-				},
-			},
+			}},
 			Summary: plan.PlanSummary{
 				Deployable:           true,
 				RuntimeModel:         "enterprise_risk_overlay",
 				SemanticFidelity:     "medium",
 				CompensatingControls: []string{"require-low-risk"},
-				Downgrades:           []string{"require-healthy-device"},
 			},
 		},
 	}
@@ -123,160 +194,27 @@ func testBundleConfig() bundler.BundleConfig {
 		NodeID:                 "node-edge-01",
 		TenantID:               "acme-corp",
 		Generation:             1,
-		IssuedAt:               time.Date(2026, 6, 17, 12, 0, 0, 0, time.UTC),
+		IssuedAt:               fixedNow(),
 		ValidFor:               24 * time.Hour,
 		ContextRegistryVersion: "1.0",
-		ActiveAdapters:         []string{"openziti-pip", "openziti-action-adapter"},
-		RiskModelName:          "enterprise-access-risk",
-		RiskModelVersion:       "1.0.0",
+		PreferredAdapters:      []string{"openziti"},
+		RuntimePDPMode:         "active",
+		FailoverBehavior:       "fail_static",
+		DefaultTTL:             time.Minute,
 		BaselineEnabled:        true,
 		GraphEnabled:           true,
 	}
 }
 
-func TestBuild_ProducesSignedBundle(t *testing.T) {
-	pub, priv, err := signing.GenerateKeyPair()
+func fixedNow() time.Time {
+	return time.Date(2026, 6, 19, 10, 0, 0, 0, time.UTC)
+}
+
+func keypair(t *testing.T) (ed25519.PublicKey, ed25519.PrivateKey) {
+	t.Helper()
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
-		t.Fatalf("GenerateKeyPair: %v", err)
+		t.Fatalf("generate keypair: %v", err)
 	}
-
-	b, err := bundler.Build(testEnforcementPlan(), testProfile(), testBundleConfig(), priv)
-	if err != nil {
-		t.Fatalf("Build: %v", err)
-	}
-
-	if b.Kind != "RuntimeBundle" {
-		t.Errorf("Kind = %q, want RuntimeBundle", b.Kind)
-	}
-	if b.Signature == "" {
-		t.Error("Signature must not be empty")
-	}
-	if b.Metadata.SpecHash == "" {
-		t.Error("SpecHash must not be empty")
-	}
-	if b.Metadata.Generation != 1 {
-		t.Errorf("Generation = %d, want 1", b.Metadata.Generation)
-	}
-
-	// Verify signature and hash.
-	if err := bundler.Verify(b, pub); err != nil {
-		t.Errorf("Verify: %v", err)
-	}
-}
-
-func TestBuild_RuntimePolicyPackContainsCompensatingRules(t *testing.T) {
-	_, priv, _ := signing.GenerateKeyPair()
-	b, err := bundler.Build(testEnforcementPlan(), testProfile(), testBundleConfig(), priv)
-	if err != nil {
-		t.Fatalf("Build: %v", err)
-	}
-
-	policies := b.Spec.PolicyPack.Spec.Policies
-	if len(policies) == 0 {
-		t.Fatal("expected at least one RuntimePolicy from compensating_control requirement")
-	}
-
-	// The risk_level compensating_control should produce a rule.
-	found := false
-	for _, p := range policies {
-		if p.When.Language == "cel" && p.When.Expression != "" {
-			found = true
-			if p.Effect.Capability == "" {
-				t.Errorf("policy %q: capability must not be empty", p.ID)
-			}
-			if p.Effect.TTL == 0 {
-				t.Errorf("policy %q: TTL must be set", p.ID)
-			}
-			if p.MissingContextBehavior == "" {
-				t.Errorf("policy %q: MissingContextBehavior must be set", p.ID)
-			}
-		}
-	}
-	if !found {
-		t.Error("no CEL rule found in RuntimePolicyPack")
-	}
-}
-
-func TestBuild_PDPProfileReflectsProfile(t *testing.T) {
-	_, priv, _ := signing.GenerateKeyPair()
-	b, err := bundler.Build(testEnforcementPlan(), testProfile(), testBundleConfig(), priv)
-	if err != nil {
-		t.Fatalf("Build: %v", err)
-	}
-
-	pdp := b.Spec.PDPProfile
-	if pdp.Kind != "RuntimePDPProfile" {
-		t.Errorf("PDPProfile.Kind = %q, want RuntimePDPProfile", pdp.Kind)
-	}
-	if pdp.Spec.LocalRiskMode == "" {
-		t.Error("LocalRiskMode must not be empty")
-	}
-	if len(pdp.Spec.AllowedCapabilities) == 0 {
-		t.Error("AllowedCapabilities must not be empty")
-	}
-	if pdp.Spec.MaxTTL == 0 {
-		t.Error("MaxTTL must not be zero")
-	}
-}
-
-func TestVerify_TamperedSpec(t *testing.T) {
-	pub, priv, _ := signing.GenerateKeyPair()
-	b, _ := bundler.Build(testEnforcementPlan(), testProfile(), testBundleConfig(), priv)
-
-	// Tamper with the spec after signing.
-	b.Spec.PolicyPack.Metadata.Name = "tampered-name"
-
-	if err := bundler.Verify(b, pub); err == nil {
-		t.Error("Verify should fail for tampered bundle")
-	}
-}
-
-func TestVerify_Expired(t *testing.T) {
-	_, priv, _ := signing.GenerateKeyPair()
-	cfg := testBundleConfig()
-	cfg.IssuedAt = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	cfg.ValidFor = 24 * time.Hour
-
-	b, _ := bundler.Build(testEnforcementPlan(), testProfile(), cfg, priv)
-
-	// Check against a time well after expiry.
-	futureNow := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
-	if err := bundler.VerifyNotExpired(b, futureNow); err == nil {
-		t.Error("VerifyNotExpired should fail for expired bundle")
-	}
-}
-
-func TestVerify_NotExpired(t *testing.T) {
-	_, priv, _ := signing.GenerateKeyPair()
-	b, _ := bundler.Build(testEnforcementPlan(), testProfile(), testBundleConfig(), priv)
-
-	// Should not be expired immediately after issuance.
-	if err := bundler.VerifyNotExpired(b, b.Metadata.IssuedAt.Add(time.Hour)); err != nil {
-		t.Errorf("VerifyNotExpired: %v", err)
-	}
-}
-
-func TestBuild_MonotonicGeneration(t *testing.T) {
-	_, priv, _ := signing.GenerateKeyPair()
-	cfg := testBundleConfig()
-	cfg.Generation = 0 // invalid
-
-	_, err := bundler.Build(testEnforcementPlan(), testProfile(), cfg, priv)
-	if err == nil {
-		t.Error("generation=0 should be rejected")
-	}
-}
-
-func TestBuild_DelegatedAndPartialNotInPack(t *testing.T) {
-	_, priv, _ := signing.GenerateKeyPair()
-	b, _ := bundler.Build(testEnforcementPlan(), testProfile(), testBundleConfig(), priv)
-
-	// Delegated and partial requirements must NOT generate RuntimePolicy rules.
-	// Only compensating_control requirements produce rules.
-	for _, p := range b.Spec.PolicyPack.Spec.Policies {
-		// No rule should reference the delegated "require-mfa" requirement.
-		if p.ID == "require-mfa" {
-			t.Errorf("delegated requirement should not produce a RuntimePolicy rule: %s", p.ID)
-		}
-	}
+	return pub, priv
 }

@@ -50,11 +50,12 @@ type AccessPolicy struct {
 // It is distinct from the specs of other policy kinds (NetworkPolicySpec,
 // AdmissionPolicySpec, etc.) which have different principal models.
 type AccessPolicySpec struct {
-	Subject    Subject     `yaml:"subject"`
-	Action     string      `yaml:"action"`
-	Resource   Resource    `yaml:"resource"`
-	Conditions []Condition `yaml:"conditions,omitempty"`
-	Effect     string      `yaml:"effect"` // allow | deny
+	Subject                Subject                 `yaml:"subject"`
+	Action                 string                  `yaml:"action"`
+	Resource               Resource                `yaml:"resource"`
+	Conditions             []Condition             `yaml:"conditions,omitempty"`
+	Effect                 string                  `yaml:"effect"` // allow | deny
+	EnforcementConstraints *EnforcementConstraints `yaml:"enforcementConstraints,omitempty"`
 }
 
 // Subject identifies who the policy applies to.
@@ -104,6 +105,32 @@ type Condition struct {
 	Operator string `yaml:"operator,omitempty"`
 	Value    any    `yaml:"value,omitempty"`
 	CEL      string `yaml:"cel,omitempty"`
+}
+
+// EnforcementConstraints declare what the policy author accepts when Forge
+// translates generic intent into target-specific enforcement.
+type EnforcementConstraints struct {
+	// Nil means not explicitly constrained and is treated permissively by the
+	// Config PDP for backwards compatibility. Set false to fail delegated
+	// requirements.
+	AllowDelegation *bool `yaml:"allowDelegation,omitempty"`
+
+	// Nil means not explicitly constrained and is treated permissively by the
+	// Config PDP. Set false to fail partial/downgraded mappings.
+	AllowSemanticDowngrade *bool `yaml:"allowSemanticDowngrade,omitempty"`
+
+	// MinimumFidelity may be "low", "medium" or "high".
+	MinimumFidelity string `yaml:"minimumFidelity,omitempty"`
+
+	// AllowedDelegationOwners restricts delegated requirement owners.
+	AllowedDelegationOwners []string `yaml:"allowedDelegationOwners,omitempty"`
+
+	// AllowedRuntimeActions restricts compensating runtime action IDs.
+	AllowedRuntimeActions []string `yaml:"allowedRuntimeActions,omitempty"`
+
+	// RequireApprovalFor documents governance gates that must be externally
+	// approved before a durable deployment proceeds.
+	RequireApprovalFor []string `yaml:"requireApprovalFor,omitempty"`
 }
 
 // CelExpr returns the CEL expression for this condition. If the cel field is

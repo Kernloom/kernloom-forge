@@ -14,7 +14,7 @@ import (
 
 // ContextKeyRegistry is the top-level YAML document defining canonical context keys.
 //
-// Lives in: registries/context/canonical-keys.yaml
+// Lives in: github.com/kernloom/kernloom-registries/registries/context/canonical-keys.yaml
 // Versioned in Git; version is embedded in compiled RuntimeBundles and ContextSnapshots.
 type ContextKeyRegistry struct {
 	APIVersion string       `yaml:"apiVersion"`
@@ -94,7 +94,7 @@ func LoadRegistryDir(dir string) (*Registry, error) {
 		return nil, fmt.Errorf("reading registry dir %s: %w", dir, err)
 	}
 	merged := &ContextKeyRegistry{
-		APIVersion: "kernloom.io/v1alpha1",
+		APIVersion: "kernloom.io/registry/v1alpha1",
 		Kind:       "ContextKeyRegistry",
 	}
 	for _, e := range entries {

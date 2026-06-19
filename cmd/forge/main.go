@@ -8,7 +8,7 @@
 //	forge compile --policy <file> --adapters <dir> --profiles <dir> [--output summary|yaml]
 //	forge validate --policy <file>
 //	forge validate-adapter --adapter <file>
-//	forge serve --addr :8443 [--adapters <dir>] [--profiles <dir>]
+//	forge serve --addr :8443 [--policy <file>] [--adapters <dir>] [--profiles <dir>] [--target <profile>] [--signing-key <key>]
 package main
 
 import (
@@ -19,11 +19,14 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 
 	"github.com/kernloom/kernloom-forge/internal/api"
+	"github.com/kernloom/kernloom-forge/internal/signing"
+	"github.com/kernloom/kernloom-forge/pkg/bundler"
 	"github.com/kernloom/kernloom-forge/pkg/compiler"
 	"github.com/kernloom/kernloom-forge/pkg/core/action"
 	"github.com/kernloom/kernloom-forge/pkg/core/adapter"
@@ -41,6 +44,12 @@ func main() {
 	root.AddCommand(compileCmd())
 	root.AddCommand(validateCmd())
 	root.AddCommand(validateAdapterCmd())
+	root.AddCommand(exportRuntimePolicyCmd())
+	root.AddCommand(buildRuntimeBundleCmd())
+	root.AddCommand(configPDPCmd())
+	root.AddCommand(reportCmd())
+	root.AddCommand(keygenCmd())
+	root.AddCommand(conformanceFixturesCmd())
 	root.AddCommand(serveCmd())
 
 	if err := root.Execute(); err != nil {
@@ -51,26 +60,52 @@ func main() {
 
 // serveCmd: forge serve --addr :8443
 func serveCmd() *cobra.Command {
-	var addr, adaptersDir, profilesDir string
+	var addr, adaptersDir, profilesDir, policyFile, target, signingKey, runtimeMode, failover string
+	var generation int
+	var validFor, ttl time.Duration
 
 	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "Run the Forge control-plane API server",
 		Example: `  forge serve --addr :8443 \
+    --policy examples/policies/investor-apps-access.yaml \
     --adapters examples/adapters/ \
-    --profiles examples/profiles/`,
+    --profiles examples/profiles/ \
+    --target openziti-production \
+    --signing-key /tmp/forge-runtime.key`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			srvLog := log.New(os.Stderr, "[forge-api] ", log.LstdFlags)
 
-			// Bundle provider: loads adapter+profile files and returns a compiled
-			// signed bundle. For the MVP we use a stub key pair (no persistent key).
 			var provider api.BundleProvider
-			if adaptersDir != "" && profilesDir != "" {
+			if adaptersDir != "" && profilesDir != "" && policyFile != "" && target != "" {
+				priv, err := signing.LoadPrivateKey(signingKey)
+				if err != nil {
+					return err
+				}
 				provider = func(ctx context.Context, nodeID string) ([]byte, error) {
-					// MVP: return a placeholder JSON bundle so KLIQ can pull something.
-					// Phase 2: compile a real signed bundle from adapters+profiles.
-					srvLog.Printf("bundle request node=%s (stub provider)", nodeID)
-					return []byte(`{"apiVersion":"kernloom.io/managed/v1alpha1","kind":"RuntimeBundle","metadata":{"node_id":"` + nodeID + `","generation":1}}`), nil
+					_, plans, profiles, err := compilePlans(policyFile, adaptersDir, profilesDir)
+					if err != nil {
+						return nil, err
+					}
+					ep, prof, err := selectTarget(plans, profiles, target)
+					if err != nil {
+						return nil, err
+					}
+					b, err := bundler.Build(ep, prof, bundler.BundleConfig{
+						NodeID:            nodeID,
+						Generation:        generation,
+						IssuedAt:          time.Now().UTC(),
+						ValidFor:          validFor,
+						PreferredAdapters: []string{prof.Spec.AdapterRef},
+						RuntimePDPMode:    runtimeMode,
+						FailoverBehavior:  failover,
+						DefaultTTL:        ttl,
+					}, priv)
+					if err != nil {
+						return nil, err
+					}
+					srvLog.Printf("bundle request node=%s target=%s generation=%d", nodeID, target, generation)
+					return yaml.Marshal(b)
 				}
 			}
 
@@ -81,8 +116,16 @@ func serveCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&addr, "addr", ":8443", "listen address")
-	cmd.Flags().StringVar(&adaptersDir, "adapters", "", "adapters directory (optional, enables bundle generation)")
-	cmd.Flags().StringVar(&profilesDir, "profiles", "", "profiles directory (optional, enables bundle generation)")
+	cmd.Flags().StringVar(&policyFile, "policy", "", "AccessPolicy YAML file (enables real bundle generation)")
+	cmd.Flags().StringVar(&adaptersDir, "adapters", "", "adapters directory")
+	cmd.Flags().StringVar(&profilesDir, "profiles", "", "profiles directory")
+	cmd.Flags().StringVar(&target, "target", "", "TargetIntegrationProfile metadata.name for generated bundles")
+	cmd.Flags().StringVar(&signingKey, "signing-key", "", "PEM Ed25519 private key for generated bundles")
+	cmd.Flags().IntVar(&generation, "generation", 1, "bundle generation")
+	cmd.Flags().DurationVar(&validFor, "valid-for", 24*time.Hour, "bundle validity duration")
+	cmd.Flags().DurationVar(&ttl, "ttl", 0, "default runtime action TTL")
+	cmd.Flags().StringVar(&runtimeMode, "runtime-pdp-mode", "active", "runtime PDP mode encoded in bundle")
+	cmd.Flags().StringVar(&failover, "failover", "fail_static", "offline failover behavior")
 	return cmd
 }
 

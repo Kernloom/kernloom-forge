@@ -1,230 +1,100 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Kernloom Contributors
 
-// Package bundler compiles a signed RuntimeBundle from Forge artifacts.
-//
-// Input:
-//   - EnforcementPlan  — compiler output (which requirements are compensating_control)
-//   - TargetIntegrationProfile — deployment profile with runtime constraints
-//   - BundleConfig  — node ID, generation, expiry, risk model ref
-//
-// Output:
-//   - Signed RuntimeBundle ready for KLIQ to download and activate
-//
-// The bundler translates the governance EnforcementPlan into a KLIQ-executable
-// RuntimePolicyPack: requirements with compensating_control status become CEL
-// rules that KLIQ's Runtime PDP evaluates against local risk assessments.
+// Package bundler translates Forge governance plans into KLIQ runtime
+// contracts. The EnforcementPlan remains the operator/audit artifact; the
+// RuntimePolicyPack and RuntimeBundle are the executable Forge-to-KLIQ wire
+// artifacts.
 package bundler
 
 import (
 	"crypto/ed25519"
 	"crypto/rand"
-	"encoding/base64"
-	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
-	"github.com/kernloom/kernloom-forge/pkg/core/bundle"
+	contracts "github.com/kernloom/kernloom-contracts"
+	registries "github.com/kernloom/kernloom-registries"
 	"github.com/kernloom/kernloom-forge/pkg/core/plan"
 	"github.com/kernloom/kernloom-forge/pkg/core/profile"
 )
 
-// BundleConfig holds the non-policy configuration for a RuntimeBundle.
-type BundleConfig struct {
-	// NodeID identifies the KLIQ node this bundle targets.
-	NodeID string
+const (
+	defaultPolicyEffect = "deny"
+	defaultPDPMode      = "active"
+	defaultFailover     = "fail_static"
+	defaultBundleTTL    = 24 * time.Hour
+)
 
-	// TenantID scopes the bundle to a tenant (optional).
-	TenantID string
-
-	// Generation is a monotonically increasing counter.
-	// Must be greater than the previously active bundle generation on this node.
-	Generation int64
-
-	// IssuedAt is the bundle creation time. Defaults to time.Now() if zero.
-	IssuedAt time.Time
-
-	// ValidFor is the lifetime of the bundle. Defaults to 24h if zero.
-	ValidFor time.Duration
-
-	// ContextRegistryVersion pins the canonical key registry version in use.
-	ContextRegistryVersion string
-
-	// ActiveAdapters lists adapter IDs KLIQ must have available.
-	ActiveAdapters []string
-
-	// RiskModelName + Version pin the risk model KLIQ uses locally.
-	RiskModelName    string
-	RiskModelVersion string
-
-	// OfflineBehavior: "observe_only" | "use_last_known_good" | "fail_closed".
-	// Defaults to "observe_only".
-	OfflineBehavior string
-
-	// BaselineEnabled controls whether KLIQ's baseline engine is active.
-	BaselineEnabled bool
-
-	// GraphEnabled controls whether KLIQ's graph learner is active.
-	GraphEnabled bool
+type RuntimePolicyConfig struct {
+	Name          string
+	NodeID        string
+	Generation    int
+	IssuedAt      time.Time
+	DefaultEffect string
+	DefaultTTL    time.Duration
 }
 
-// Build produces a signed RuntimeBundle from a compiled EnforcementPlan,
-// a TargetIntegrationProfile, a BundleConfig, and an Ed25519 signing key.
-//
-// Only requirements with status compensating_control generate runtime rules.
-// Delegated, partial and implemented requirements are handled by the target's
-// own runtime evaluation — no KLIQ rule is needed.
-func Build(
-	ep *plan.EnforcementPlan,
-	prof *profile.TargetIntegrationProfile,
-	cfg BundleConfig,
-	privKey ed25519.PrivateKey,
-) (*bundle.RuntimeBundle, error) {
+type BundleConfig struct {
+	NodeID                 string
+	TenantID               string
+	Generation             int
+	IssuedAt               time.Time
+	ValidFor               time.Duration
+	ContextRegistryVersion string
+	PreferredAdapters      []string
+	DisabledAdapters       []string
+	RuntimePDPMode         string
+	FailoverBehavior       string
+	DefaultTTL             time.Duration
+	RegistrySnapshot       contracts.RegistrySnapshot
+	BaselineEnabled        bool
+	GraphEnabled           bool
+}
+
+func BuildPolicyPack(ep *plan.EnforcementPlan, prof *profile.TargetIntegrationProfile, cfg RuntimePolicyConfig) (contracts.RuntimePolicyPack, error) {
 	if ep == nil {
-		return nil, fmt.Errorf("bundler: EnforcementPlan must not be nil")
+		return contracts.RuntimePolicyPack{}, fmt.Errorf("bundler: EnforcementPlan must not be nil")
 	}
 	if prof == nil {
-		return nil, fmt.Errorf("bundler: TargetIntegrationProfile must not be nil")
+		return contracts.RuntimePolicyPack{}, fmt.Errorf("bundler: TargetIntegrationProfile must not be nil")
 	}
-	if cfg.NodeID == "" {
-		return nil, fmt.Errorf("bundler: NodeID is required")
+	issuedAt := cfg.IssuedAt
+	if issuedAt.IsZero() {
+		issuedAt = time.Now().UTC()
 	}
-	if cfg.Generation <= 0 {
-		return nil, fmt.Errorf("bundler: Generation must be > 0")
+	name := cfg.Name
+	if name == "" {
+		name = ep.Metadata.SourcePolicy + "-" + prof.Metadata.Name
 	}
-
-	now := cfg.IssuedAt
-	if now.IsZero() {
-		now = time.Now().UTC()
+	defaultEffect := cfg.DefaultEffect
+	if defaultEffect == "" {
+		defaultEffect = defaultPolicyEffect
 	}
-	validFor := cfg.ValidFor
-	if validFor == 0 {
-		validFor = 24 * time.Hour
-	}
-	offlineBehavior := cfg.OfflineBehavior
-	if offlineBehavior == "" {
-		offlineBehavior = "observe_only"
+	defaultTTL := cfg.DefaultTTL
+	if defaultTTL <= 0 {
+		defaultTTL = defaultTTLForProfile(prof)
 	}
 
-	// Build RuntimePolicyPack from EnforcementPlan.
-	pack, err := buildPolicyPack(ep, prof)
-	if err != nil {
-		return nil, fmt.Errorf("bundler: building policy pack: %w", err)
-	}
-
-	// Build RuntimePDPProfile from TargetIntegrationProfile.
-	pdpProfile := buildPDPProfile(prof, cfg)
-
-	b := &bundle.RuntimeBundle{
-		APIVersion: "kernloom.io/runtime/v1alpha1",
-		Kind:       "RuntimeBundle",
-		Metadata: bundle.BundleMeta{
-			BundleID:   generateID(),
+	pack := contracts.RuntimePolicyPack{
+		TypeMeta: contracts.TypeMeta{
+			APIVersion: contracts.RuntimeAPIVersion,
+			Kind:       contracts.KindRuntimePolicyPack,
+		},
+		Metadata: contracts.ObjectMeta{
+			Name:       name,
 			NodeID:     cfg.NodeID,
-			TenantID:   cfg.TenantID,
 			Generation: cfg.Generation,
-			IssuedAt:   now,
-			ExpiresAt:  now.Add(validFor),
-		},
-		Spec: bundle.BundleSpec{
-			PolicyPack:             *pack,
-			PDPProfile:             *pdpProfile,
-			ContextRegistryVersion: cfg.ContextRegistryVersion,
-			ActiveAdapters:         cfg.ActiveAdapters,
-			BaselineLifecycle: bundle.BaselineLifecycleConfig{
-				Enabled:             cfg.BaselineEnabled,
-				FreezeOnHighRisk:    true,
-				MinLearningDuration: 7 * 24 * time.Hour,
-			},
-			GraphLifecycle: bundle.GraphLifecycleConfig{
-				Enabled:          cfg.GraphEnabled,
-				MaxEdgesPerNode:  10_000,
-				FreezeOnHighRisk: true,
+			IssuedAt:   issuedAt,
+			Labels: map[string]string{
+				"forge.kernloom.io/source_policy": ep.Metadata.SourcePolicy,
+				"forge.kernloom.io/target":        ep.Metadata.Target,
+				"forge.kernloom.io/adapter":       prof.Spec.AdapterRef,
 			},
 		},
-	}
-
-	if err := b.Validate(); err != nil {
-		return nil, fmt.Errorf("bundler: bundle validation failed: %w", err)
-	}
-
-	// Compute and store spec hash.
-	hash, err := b.ComputeHash()
-	if err != nil {
-		return nil, fmt.Errorf("bundler: computing hash: %w", err)
-	}
-	b.Metadata.SpecHash = hash
-
-	// Sign the bundle.
-	if err := Sign(b, privKey); err != nil {
-		return nil, fmt.Errorf("bundler: signing: %w", err)
-	}
-
-	return b, nil
-}
-
-// Sign computes the Ed25519 signature over the canonical BundleSpec JSON
-// and stores the base64-encoded signature in bundle.Signature.
-func Sign(b *bundle.RuntimeBundle, privKey ed25519.PrivateKey) error {
-	data, err := b.CanonicalJSON()
-	if err != nil {
-		return fmt.Errorf("sign: canonical JSON: %w", err)
-	}
-	sig := ed25519.Sign(privKey, data)
-	b.Signature = base64.StdEncoding.EncodeToString(sig)
-	return nil
-}
-
-// Verify checks the Ed25519 signature on a RuntimeBundle.
-// Returns nil when the signature is valid and the hash matches.
-func Verify(b *bundle.RuntimeBundle, pubKey ed25519.PublicKey) error {
-	if b.Signature == "" {
-		return fmt.Errorf("verify: bundle is not signed")
-	}
-	data, err := b.CanonicalJSON()
-	if err != nil {
-		return fmt.Errorf("verify: canonical JSON: %w", err)
-	}
-	sigBytes, err := base64.StdEncoding.DecodeString(b.Signature)
-	if err != nil {
-		return fmt.Errorf("verify: decoding signature: %w", err)
-	}
-	if !ed25519.Verify(pubKey, data, sigBytes) {
-		return fmt.Errorf("verify: signature verification failed")
-	}
-	// Also verify the spec hash matches.
-	computed, err := b.ComputeHash()
-	if err != nil {
-		return fmt.Errorf("verify: computing hash: %w", err)
-	}
-	if b.Metadata.SpecHash != "" && computed != b.Metadata.SpecHash {
-		return fmt.Errorf("verify: spec hash mismatch (stored=%s computed=%s)",
-			b.Metadata.SpecHash, computed)
-	}
-	return nil
-}
-
-// VerifyNotExpired returns an error if the bundle has passed its ExpiresAt.
-func VerifyNotExpired(b *bundle.RuntimeBundle, now time.Time) error {
-	if b.Metadata.ExpiresAt.IsZero() {
-		return fmt.Errorf("bundle has no expiry")
-	}
-	if now.After(b.Metadata.ExpiresAt) {
-		return fmt.Errorf("bundle expired at %s", b.Metadata.ExpiresAt.Format(time.RFC3339))
-	}
-	return nil
-}
-
-// buildPolicyPack converts the compensating_control entries in an EnforcementPlan
-// into executable RuntimePolicy rules.
-func buildPolicyPack(ep *plan.EnforcementPlan, prof *profile.TargetIntegrationProfile) (*bundle.RuntimePolicyPack, error) {
-	pack := &bundle.RuntimePolicyPack{
-		APIVersion: "kernloom.io/policy/runtime/v1alpha1",
-		Kind:       "RuntimePolicyPack",
-		Metadata: bundle.PackMeta{
-			Name:         ep.Metadata.SourcePolicy + "-" + prof.Metadata.Name,
-			Generation:   1,
-			SourcePolicy: ep.Metadata.SourcePolicy,
+		Spec: contracts.RuntimePolicyPackSpec{
+			DefaultEffect: defaultEffect,
 		},
 	}
 
@@ -233,187 +103,271 @@ func buildPolicyPack(ep *plan.EnforcementPlan, prof *profile.TargetIntegrationPr
 			continue
 		}
 		if req.ActionBinding == nil {
-			continue
+			return contracts.RuntimePolicyPack{}, fmt.Errorf("bundler: compensating requirement %q has no action binding", req.ID)
 		}
-		// Only generate a rule when the action is in the profile's allowed list.
-		if !isActionAllowed(req.ActionBinding.Action, prof.Spec.AllowedRuntimeActions) {
-			continue
+		if !prof.IsActionAllowed(req.ActionBinding.Action) {
+			return contracts.RuntimePolicyPack{}, fmt.Errorf("bundler: action %q for requirement %q is not allowed by profile %q", req.ActionBinding.Action, req.ID, prof.Metadata.Name)
 		}
-
-		rule := buildRuntimePolicy(req, prof)
-		pack.Spec.Policies = append(pack.Spec.Policies, rule)
+		action, err := actionSpecForBinding(req, defaultTTL)
+		if err != nil {
+			return contracts.RuntimePolicyPack{}, err
+		}
+		expr := violationExpression(req)
+		if expr == "" {
+			return contracts.RuntimePolicyPack{}, fmt.Errorf("bundler: no runtime expression for compensating requirement %q", req.ID)
+		}
+		pack.Spec.Rules = append(pack.Spec.Rules, contracts.RuntimePolicyRule{
+			ID:          "compensating-" + sanitizeID(req.ID) + "-" + sanitizeID(prof.Metadata.Name),
+			Description: "Forge compensating control for " + req.ID,
+			When:        expr,
+			Then:        action,
+			ReasonCodes: reasonCodesForRequirement(req),
+		})
+		addCapability(&pack, action.Capability)
 	}
 
 	return pack, nil
 }
 
-// buildRuntimePolicy compiles one compensating_control requirement into a RuntimePolicy.
-func buildRuntimePolicy(req plan.RequirementEnforcement, prof *profile.TargetIntegrationProfile) bundle.RuntimePolicy {
-	// Default CEL expression for risk-based compensating controls.
-	// The threshold values (0.80 / 0.70) are conservative safe defaults.
-	// Future: allow per-policy threshold configuration.
-	celExpr := "risk.level in ['high', 'critical'] && risk.confidence >= 0.80 && risk.completeness >= 0.70"
+func Build(ep *plan.EnforcementPlan, prof *profile.TargetIntegrationProfile, cfg BundleConfig, privKey ed25519.PrivateKey) (contracts.RuntimeBundle, error) {
+	if len(privKey) != ed25519.PrivateKeySize {
+		return contracts.RuntimeBundle{}, fmt.Errorf("bundler: invalid Ed25519 private key size: got %d want %d", len(privKey), ed25519.PrivateKeySize)
+	}
+	if cfg.NodeID == "" {
+		return contracts.RuntimeBundle{}, fmt.Errorf("bundler: NodeID is required")
+	}
+	if cfg.Generation <= 0 {
+		return contracts.RuntimeBundle{}, fmt.Errorf("bundler: Generation must be > 0")
+	}
+	issuedAt := cfg.IssuedAt
+	if issuedAt.IsZero() {
+		issuedAt = time.Now().UTC()
+	}
+	validFor := cfg.ValidFor
+	if validFor <= 0 {
+		validFor = defaultBundleTTL
+	}
+	pdpMode := cfg.RuntimePDPMode
+	if pdpMode == "" {
+		pdpMode = defaultPDPMode
+	}
+	failover := cfg.FailoverBehavior
+	if failover == "" {
+		failover = defaultFailover
+	}
+	registrySnapshot := cfg.RegistrySnapshot
+	if registrySnapshot.Ref.Name == "" {
+		var err error
+		registrySnapshot, err = registries.EmbeddedSnapshot()
+		if err != nil {
+			return contracts.RuntimeBundle{}, fmt.Errorf("bundler: load registry snapshot: %w", err)
+		}
+	}
+	contextRegistryVersion := cfg.ContextRegistryVersion
+	if contextRegistryVersion == "" {
+		contextRegistryVersion = registrySnapshot.ContextVersion
+	}
 
-	// Determine TTL from ActionBinding or profile constraints.
-	ttl := 30 * time.Minute
+	pack, err := BuildPolicyPack(ep, prof, RuntimePolicyConfig{
+		NodeID:     cfg.NodeID,
+		Generation: cfg.Generation,
+		IssuedAt:   issuedAt,
+		DefaultTTL: cfg.DefaultTTL,
+	})
+	if err != nil {
+		return contracts.RuntimeBundle{}, err
+	}
+
+	bundle := contracts.RuntimeBundle{
+		TypeMeta: contracts.TypeMeta{
+			APIVersion: contracts.RuntimeAPIVersion,
+			Kind:       contracts.KindRuntimeBundle,
+		},
+		Metadata: contracts.ObjectMeta{
+			ID:         generateID(),
+			Name:       pack.Metadata.Name,
+			NodeID:     cfg.NodeID,
+			Generation: cfg.Generation,
+			IssuedAt:   issuedAt,
+			ExpiresAt:  issuedAt.Add(validFor),
+			Labels: map[string]string{
+				"forge.kernloom.io/source_policy": ep.Metadata.SourcePolicy,
+				"forge.kernloom.io/target":        ep.Metadata.Target,
+				"forge.kernloom.io/adapter":       prof.Spec.AdapterRef,
+			},
+		},
+		Spec: contracts.RuntimeBundleSpec{
+			RuntimePolicyPack: pack,
+			Registry:          registrySnapshot.Ref,
+			RegistrySnapshot:  registrySnapshot,
+			RuntimePDPProfile: contracts.RuntimePDPProfile{
+				Name: prof.Metadata.Name,
+				Mode: pdpMode,
+				Variables: []contracts.RuntimeInput{
+					{Name: "risk", Required: true, Source: "risk_assessment"},
+					{Name: "signals", Required: false, Source: "runtime_signals"},
+					{Name: "fsm", Required: false, Source: "local_analyzer"},
+				},
+			},
+			ContextRegistryVersion: contextRegistryVersion,
+			AdapterSelector: contracts.AdapterSelector{
+				RequiredCapabilities: pack.Spec.CapabilitiesRequired,
+				PreferredAdapters:    append([]string(nil), cfg.PreferredAdapters...),
+				DisabledAdapters:     append([]string(nil), cfg.DisabledAdapters...),
+			},
+			BaselineLifecycle: contracts.BaselineLifecycle{
+				Mode:             enabledMode(cfg.BaselineEnabled),
+				AllowLocalFreeze: cfg.BaselineEnabled,
+			},
+			GraphLifecycle: contracts.GraphLifecycle{
+				Mode: cfgGraphMode(cfg.GraphEnabled),
+			},
+			EnforcementBounds: contracts.EnforcementBounds{
+				AllowBlock: allowsBlock(pack),
+			},
+			Failover: contracts.FailoverConfig{
+				Behavior: failover,
+			},
+		},
+	}
+	return contracts.SignRuntimeBundle(bundle, "forge-runtime", privKey)
+}
+
+func Verify(bundle contracts.RuntimeBundle, pubKey ed25519.PublicKey, now time.Time) error {
+	return contracts.VerifyRuntimeBundle(bundle, pubKey, now)
+}
+
+func VerifyNotExpired(bundle contracts.RuntimeBundle, now time.Time) error {
+	if !bundle.Metadata.ExpiresAt.IsZero() && !now.Before(bundle.Metadata.ExpiresAt) {
+		return fmt.Errorf("bundle expired at %s", bundle.Metadata.ExpiresAt.Format(time.RFC3339))
+	}
+	return nil
+}
+
+func actionSpecForBinding(req plan.RequirementEnforcement, defaultTTL time.Duration) (contracts.RuntimeActionSpec, error) {
+	capability, level, ok := actionToCapability(req.ActionBinding.Action)
+	if !ok {
+		return contracts.RuntimeActionSpec{}, fmt.Errorf("bundler: action %q has no KLIQ runtime capability mapping", req.ActionBinding.Action)
+	}
+	ttl := defaultTTL
 	if req.ActionBinding.MaxTTL != "" {
-		if parsed, err := time.ParseDuration(req.ActionBinding.MaxTTL); err == nil && parsed > 0 {
+		parsed, err := time.ParseDuration(req.ActionBinding.MaxTTL)
+		if err != nil {
+			return contracts.RuntimeActionSpec{}, fmt.Errorf("bundler: parse maxTTL for requirement %q: %w", req.ID, err)
+		}
+		if parsed > 0 {
 			ttl = parsed
 		}
 	}
-	// Enforce the profile's max TTL constraint.
-	maxTTL := prof.Spec.Runtime.Constraints.RequireTTL
-	_ = maxTTL // TTL enforcement is a KLIQ-side check at activation time
-
-	// Map the action to a canonical Kernloom capability.
-	capability := actionToCapability(req.ActionBinding.Action)
-
-	// Params carry adapter-specific parameters (e.g. the attribute name for OpenZiti).
-	params := map[string]string{}
+	params := map[string]any{
+		"forge_requirement_id": req.ID,
+		"forge_action":         req.ActionBinding.Action,
+	}
 	if req.ActionBinding.Attribute != "" {
 		params["attribute"] = req.ActionBinding.Attribute
 	}
 	if req.ActionBinding.DecisionOwner != "" {
-		params["decisionOwner"] = req.ActionBinding.DecisionOwner
+		params["decision_owner"] = req.ActionBinding.DecisionOwner
 	}
+	return contracts.RuntimeActionSpec{
+		Capability: capability,
+		Level:      level,
+		TTL:        contracts.NewDuration(ttl),
+		Params:     params,
+	}, nil
+}
 
-	return bundle.RuntimePolicy{
-		ID: "compensating-" + req.RequirementKind + "-" + sanitizeID(prof.Spec.AdapterRef),
-		Scope: bundle.PolicyScope{
-			Type: "protected_resource",
-			Ref:  ep_resourceRef(req),
-		},
-		When: bundle.PolicyWhen{
-			Language:   "cel",
-			Expression: celExpr,
-		},
-		Effect: bundle.PolicyEffect{
-			Capability: capability,
-			TTL:        ttl,
-			Params:     params,
-		},
-		MissingContextBehavior: "observe_only",
-		ReasonCode:             "ENTERPRISE_RISK_" + upperSnake(req.RequirementKind),
+func actionToCapability(action string) (capability, level string, ok bool) {
+	switch action {
+	case "network.flow_rate_limit", "rate_limit_flow", "network.rate_limit_source":
+		return "enforce.traffic.rate_limit", "hard", true
+	case "network.flow_deny", "deny_flow", "network.block_source", "network.cgroup_block", "block_process_cgroup":
+		return "enforce.access.deny", "block", true
+	case "remove_kernloom_access_attribute":
+		return "enforce.access.deny", "block", true
+	case "identity.disable", "disable_identity", "identity.account_disable":
+		return "enforce.access.deny", "block", true
+	case "revoke_active_sessions":
+		return "enforce.access.deny", "hard", true
+	default:
+		return "", "", false
 	}
 }
 
-// buildPDPProfile translates a TargetIntegrationProfile into a RuntimePDPProfile.
-func buildPDPProfile(prof *profile.TargetIntegrationProfile, cfg BundleConfig) *bundle.RuntimePDPProfile {
-	// Determine local risk mode from integration mode.
-	riskMode := "local_lite"
-	if prof.Spec.Mode == profile.ModeConfigOnly {
-		riskMode = "none"
-	} else if prof.Spec.Mode == profile.ModeKernloomPDPNative {
-		riskMode = "local_full"
+func violationExpression(req plan.RequirementEnforcement) string {
+	switch req.RequirementKind {
+	case "risk_level":
+		return "risk.level in ['high', 'critical']"
+	case "device_posture":
+		return "device.posture.status in ['degraded', 'unhealthy', 'unknown']"
+	case "auth_strength":
+		return "!(session.authentication.strength in ['mfa', 'phishing_resistant_mfa'])"
 	}
+	if strings.TrimSpace(req.Requirement) == "" {
+		return ""
+	}
+	return "!(" + req.Requirement + ")"
+}
 
-	// Extract allowed capabilities from the profile's allowedRuntimeActions.
-	// Each action maps to a canonical capability.
-	var caps []string
-	for _, action := range prof.Spec.AllowedRuntimeActions {
-		if cap := actionToCapability(action); cap != "" {
-			caps = append(caps, cap)
+func reasonCodesForRequirement(req plan.RequirementEnforcement) []string {
+	out := []string{"forge_compensating_control", "requirement_" + sanitizeReasonCode(req.ID)}
+	switch req.RequirementKind {
+	case "risk_level":
+		out = append(out, "risk_high")
+	case "device_posture":
+		out = append(out, "device_posture_not_healthy")
+	case "auth_strength":
+		out = append(out, "auth_strength_insufficient")
+	}
+	return out
+}
+
+func sanitizeReasonCode(s string) string {
+	return strings.ReplaceAll(sanitizeID(s), "-", "_")
+}
+
+func addCapability(pack *contracts.RuntimePolicyPack, cap string) {
+	if cap == "" {
+		return
+	}
+	for _, existing := range pack.Spec.CapabilitiesRequired {
+		if existing == cap {
+			return
 		}
 	}
-
-	maxTTL := 30 * time.Minute
-	if prof.Spec.Runtime.Constraints.RequireTTL {
-		maxTTL = 60 * time.Minute
-	}
-
-	offlineBehavior := cfg.OfflineBehavior
-	if offlineBehavior == "" {
-		offlineBehavior = "observe_only"
-	}
-
-	return &bundle.RuntimePDPProfile{
-		APIVersion: "kernloom.io/runtime/v1alpha1",
-		Kind:       "RuntimePDPProfile",
-		Metadata:   bundle.ProfileMeta{Name: prof.Metadata.Name},
-		Spec: bundle.PDPProfileSpec{
-			LocalRiskMode:       riskMode,
-			RiskModelRef:        bundle.RiskModelRef{Name: cfg.RiskModelName, Version: cfg.RiskModelVersion},
-			AllowedCapabilities: caps,
-			MaxActionIntensity:  "hard",
-			MaxTTL:              maxTTL,
-			AllowLocalBlock:     !prof.Spec.Runtime.Constraints.RestrictiveOnly,
-			OfflineBehavior:     offlineBehavior,
-			GlobalRiskTTL:       4 * time.Hour,
-		},
-	}
+	pack.Spec.CapabilitiesRequired = append(pack.Spec.CapabilitiesRequired, cap)
 }
 
-// isActionAllowed returns true if the action is in the allowed list.
-func isActionAllowed(action string, allowed []string) bool {
-	for _, a := range allowed {
-		if a == action {
+func allowsBlock(pack contracts.RuntimePolicyPack) bool {
+	for _, rule := range pack.Spec.Rules {
+		if rule.Then.Level == "block" || rule.Then.Capability == "enforce.access.deny" {
 			return true
 		}
 	}
 	return false
 }
 
-// actionToCapability maps a RuntimeActionCatalog action ID to a canonical capability.
-func actionToCapability(action string) string {
-	switch action {
-	case "remove_kernloom_access_attribute", "remove_managed_role_attribute":
-		return "access.restrict.identity"
-	case "identity.disable", "disable_identity":
-		return "access.disable.identity"
-	case "revoke_active_sessions":
-		return "access.revoke.sessions"
-	case "force_mfa_step_up":
-		return "access.require.step_up"
-	case "network.flow_deny", "deny_flow":
-		return "network.deny"
-	case "network.flow_rate_limit", "rate_limit_flow":
-		return "network.rate_limit"
-	case "network.cgroup_block", "block_process_cgroup":
-		return "network.block.cgroup"
-	default:
-		return ""
+func defaultTTLForProfile(prof *profile.TargetIntegrationProfile) time.Duration {
+	if prof.Spec.Mode == profile.ModeEnterpriseRiskOverlay {
+		return 30 * time.Minute
 	}
+	return 30 * time.Second
 }
 
-// ep_resourceRef extracts a resource ref from a RequirementEnforcement.
-// This is a best-effort extraction — the full resource ref is in the EnforcementPlan
-// scope which we don't have per-requirement; use the target profile name as fallback.
-func ep_resourceRef(req plan.RequirementEnforcement) string {
-	if req.Ownership != nil && req.Ownership.TargetAuthorizationOwner != "" {
-		return "profile:" + req.Ownership.TargetAuthorizationOwner
+func enabledMode(enabled bool) string {
+	if enabled {
+		return "managed"
 	}
-	return ""
+	return "disabled"
 }
 
-// sanitizeID replaces special chars with hyphens for use in identifiers.
-func sanitizeID(s string) string {
-	result := make([]byte, len(s))
-	for i, c := range s {
-		if (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' {
-			result[i] = byte(c)
-		} else {
-			result[i] = '-'
-		}
+func cfgGraphMode(enabled bool) string {
+	if enabled {
+		return "managed"
 	}
-	return string(result)
+	return "disabled"
 }
 
-// upperSnake converts a string to UPPER_SNAKE_CASE reason code.
-func upperSnake(s string) string {
-	result := make([]byte, len(s))
-	for i, c := range s {
-		if c == '.' || c == '-' || c == ' ' {
-			result[i] = '_'
-		} else if c >= 'a' && c <= 'z' {
-			result[i] = byte(c - 32)
-		} else {
-			result[i] = byte(c)
-		}
-	}
-	return string(result)
-}
-
-// generateID returns a random UUIDv4 string.
 func generateID() string {
 	var b [16]byte
 	_, _ = rand.Read(b[:])
@@ -422,16 +376,21 @@ func generateID() string {
 	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:])
 }
 
-// jsonCompact returns the compact JSON encoding of v.
-// Used internally for hash computation consistency.
-func jsonCompact(v any) ([]byte, error) {
-	return json.Marshal(v)
+func sanitizeID(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	var out strings.Builder
+	lastDash := false
+	for _, r := range s {
+		ok := (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')
+		if ok {
+			out.WriteRune(r)
+			lastDash = false
+			continue
+		}
+		if !lastDash {
+			out.WriteByte('-')
+			lastDash = true
+		}
+	}
+	return strings.Trim(out.String(), "-")
 }
-
-// RequirementKind is re-exported for convenience in tests.
-// Matches the Kind constants from pkg/core/requirement.
-const (
-	KindRiskLevel     = "risk_level"
-	KindDevicePosture = "device_posture"
-	KindAuthStrength  = "auth_strength"
-)

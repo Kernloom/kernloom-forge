@@ -40,13 +40,14 @@ A policy written once compiles against multiple targets simultaneously. Each tar
 | `pkg/core/plan/` | EnforcementPlan — compiler governance output | ✅ |
 | `pkg/core/context/` | ContextFact, VendorAssessment, ContextSnapshot, Registry | ✅ |
 | `pkg/core/risk/` | RiskAssessment, RiskModel, deterministic Risk Engine | ✅ |
-| `pkg/core/bundle/` | RuntimeBundle, RuntimePolicyPack, RuntimePDPProfile | ✅ |
-| `pkg/bundler/` | Build + Sign + Verify (Ed25519) | ✅ |
+| `pkg/core/bundle/` | Historical Forge bundle model | legacy |
+| `pkg/bundler/` | Build KLIQ `kernloom-contracts` RuntimePolicyPack/RuntimeBundle + Sign/Verify (Ed25519) | ✅ |
 | `pkg/compiler/` | AccessPolicy → EnforcementPlan | ✅ |
-| `registries/context/` | Canonical context key definitions | ✅ |
-| `registries/risk/` | Reference risk model (enterprise-access-risk) | ✅ |
-| Forge Control Plane API | Node enrollment, bundle distribution, findings reception | planned |
-| Config PDP | Validates EnforcementPlan against enforcementConstraints | planned |
+| `pkg/configpdp/` | Validates EnforcementPlan against `enforcementConstraints` | ✅ |
+| `pkg/report/` | Coverage, delegation, downgrade and Config PDP reports | ✅ |
+| `pkg/conformance/` | KLIQ/Forge runtime contract fixture generator | ✅ |
+| `github.com/kernloom/kernloom-registries` | Canonical registry standard consumed by Forge | ✅ |
+| Forge Control Plane API | Node enrollment, real signed bundle distribution, findings reception | ✅ MVP |
 | Drift Detection | Read connector + actual state comparison | planned |
 
 ---
@@ -72,6 +73,43 @@ go test ./...
 
 # Validate an adapter capability manifest
 ./bin/forge validate-adapter --adapter examples/adapters/openziti/capability.yaml
+
+# Export a standalone KLIQ RuntimePolicyPack
+./bin/forge export-runtime-policy \
+  --policy examples/policies/investor-apps-access.yaml \
+  --adapters examples/adapters/ \
+  --profiles examples/profiles/ \
+  --target openziti-production \
+  --output /tmp/runtime-policy.yaml
+
+# Build a signed KLIQ RuntimeBundle
+./bin/forge keygen --private /tmp/forge-runtime.key --public /tmp/forge-runtime.pub
+./bin/forge build-runtime-bundle \
+  --policy examples/policies/investor-apps-access.yaml \
+  --adapters examples/adapters/ \
+  --profiles examples/profiles/ \
+  --target openziti-production \
+  --node-id node-1 \
+  --signing-key /tmp/forge-runtime.key \
+  --output /tmp/runtime-bundle.yaml
+
+# Serve signed RuntimeBundles to managed KLIQ nodes
+./bin/forge serve \
+  --addr :8443 \
+  --policy examples/policies/investor-apps-access.yaml \
+  --adapters examples/adapters/ \
+  --profiles examples/profiles/ \
+  --target openziti-production \
+  --signing-key /tmp/forge-runtime.key
+
+# Produce operator reports
+./bin/forge report \
+  --policy examples/policies/investor-apps-access.yaml \
+  --adapters examples/adapters/ \
+  --profiles examples/profiles/
+
+# Write KLIQ/Forge conformance fixtures
+./bin/forge conformance-fixtures --output /tmp/kernloom-conformance
 ```
 
 ---
@@ -141,27 +179,33 @@ When a vendor cannot evaluate an enterprise requirement natively (e.g. OpenZiti 
 ```
 
 ```yaml
-# In compiled RuntimePolicyPack:
-- id: compensating-risk_level-openziti
-  when:
-    language: cel
-    expression: "risk.level in ['high','critical'] && risk.confidence >= 0.80"
-  effect:
-    capability: access.restrict.identity
-    ttl: 30m
+# In exported KLIQ RuntimePolicyPack:
+apiVersion: kernloom.io/runtime/v1alpha1
+kind: RuntimePolicyPack
+spec:
+  capabilities_required:
+    - enforce.access.deny
+  rules:
+    - id: compensating-require-low-risk-openziti-production
+      when: "risk.level in ['high', 'critical']"
+      then:
+        capability: enforce.access.deny
+        level: block
+        ttl: 30s
 ```
+
+`forge build-runtime-bundle` wraps that policy pack in a signed
+`kind: RuntimeBundle` from `github.com/kernloom/kernloom-contracts`. `forge
+serve` can now generate the same signed bundle dynamically for
+`GET /api/v1/nodes/{id}/runtime-bundle` when started with `--policy`,
+`--adapters`, `--profiles`, `--target` and `--signing-key`.
 
 ### Context and Risk
 
-```yaml
-# registries/context/canonical-keys.yaml
-# 25 canonical context keys: subject.role, device.posture.status,
-# session.authentication.strength, subject.risk.level, ...
-
-# registries/risk/enterprise-access-risk-v1.yaml
-# Deterministic CEL-based risk model: vendor-neutral rules,
-# per-domain scoring, exponential decay, negative contributions
-```
+Canonical context, risk, capability, action, signal, metric, scope and
+granularity semantics live in `github.com/kernloom/kernloom-registries`.
+Forge consumes that module, pins a registry digest into RuntimeBundles and
+uses the snapshot as the source of truth for KLIQ managed-mode validation.
 
 The risk engine is a pure function: `Evaluate(model, snapshot, indicators) → EvalResult`. Used for Forge simulation/validation, KLIQ local evaluation, and Correlate global aggregation.
 
@@ -171,7 +215,7 @@ The risk engine is a pure function: `Evaluate(model, snapshot, indicators) → E
 
 ```
 kernloom-forge/
-├── cmd/forge/                     CLI entry point (compile, validate, validate-adapter)
+├── cmd/forge/                     CLI entry point (compile, export-runtime-policy, bundle, report, serve)
 ├── examples/
 │   ├── adapters/
 │   │   ├── openziti/              capability.yaml, mappings.yaml, actions.yaml
@@ -191,12 +235,12 @@ kernloom-forge/
 │   │   ├── plan/                  EnforcementPlan
 │   │   ├── context/               ContextFact, VendorAssessment, ContextSnapshot, Registry
 │   │   ├── risk/                  RiskAssessment, RiskModel, Engine
-│   │   └── bundle/                RuntimeBundle, RuntimePolicyPack, RuntimePDPProfile
+│   │   └── bundle/                Historical Forge-local bundle structs
 │   ├── compiler/                  AccessPolicy + profiles → EnforcementPlan
-│   └── bundler/                   EnforcementPlan + profile → signed RuntimeBundle
-├── registries/
-│   ├── context/                   canonical-keys.yaml (25 canonical context keys)
-│   └── risk/                      enterprise-access-risk-v1.yaml
+│   ├── configpdp/                 enforcementConstraints validation
+│   ├── report/                    coverage/delegation/downgrade report set
+│   ├── conformance/               KLIQ/Forge fixture generator
+│   └── bundler/                   EnforcementPlan + profile → KLIQ contracts RuntimeBundle
 └── internal/
     └── signing/                   Ed25519 key generation, signing, verification
 ```
