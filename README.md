@@ -93,6 +93,13 @@ go test ./...
   --signing-key /tmp/forge-runtime.key \
   --output /tmp/runtime-bundle.yaml
 
+# Pre-register a managed KLIQ node.
+# Copy the printed enroll_token into the node config or CLI flag.
+./bin/forge enroll-token create \
+  --store /tmp/forge-enroll-tokens.yaml \
+  --node-id node-1 \
+  --ttl 24h
+
 # Serve signed RuntimeBundles to managed KLIQ nodes
 ./bin/forge serve \
   --addr :8443 \
@@ -100,7 +107,8 @@ go test ./...
   --adapters examples/adapters/ \
   --profiles examples/profiles/ \
   --target openziti-production \
-  --signing-key /tmp/forge-runtime.key
+  --signing-key /tmp/forge-runtime.key \
+  --enroll-token-store /tmp/forge-enroll-tokens.yaml
 
 # Produce operator reports
 ./bin/forge report \
