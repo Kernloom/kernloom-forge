@@ -7,6 +7,19 @@ KLIQ enforces locally via its PEP adapters (KLShield, netfilter, OpenZiti, …).
 
 ---
 
+## Current Release Line
+
+`v0.3.0` focuses on the Forge-to-KLIQ runtime path:
+
+- Write or convert an `AccessPolicy`.
+- Compile reports and enforcement plans.
+- Export a standalone `RuntimePolicyPack` for `kliq --policy-file`.
+- Build or serve a signed `RuntimeBundle` for managed KLIQ.
+- Pre-register managed nodes with enrollment tokens.
+- Include a pinned registry snapshot from `kernloom-registries`.
+
+---
+
 ## Core idea
 
 Forge separates five concerns:
@@ -41,13 +54,14 @@ A policy written once compiles against multiple targets simultaneously. Each tar
 | `pkg/core/context/` | ContextFact, VendorAssessment, ContextSnapshot, Registry | ✅ |
 | `pkg/core/risk/` | RiskAssessment, RiskModel, deterministic Risk Engine | ✅ |
 | `pkg/core/bundle/` | Historical Forge bundle model | legacy |
+| `pkg/core/naturalintent/` | Simple natural intent parser/converter to `AccessPolicy` | MVP |
 | `pkg/bundler/` | Build KLIQ `kernloom-contracts` RuntimePolicyPack/RuntimeBundle + Sign/Verify (Ed25519) | ✅ |
 | `pkg/compiler/` | AccessPolicy → EnforcementPlan | ✅ |
 | `pkg/configpdp/` | Validates EnforcementPlan against `enforcementConstraints` | ✅ |
 | `pkg/report/` | Coverage, delegation, downgrade and Config PDP reports | ✅ |
 | `pkg/conformance/` | KLIQ/Forge runtime contract fixture generator | ✅ |
 | `github.com/kernloom/kernloom-registries` | Canonical registry standard consumed by Forge | ✅ |
-| Forge Control Plane API | Node enrollment, real signed bundle distribution, findings reception | ✅ MVP |
+| Forge Control Plane API | Node enrollment tokens, signed bundle distribution, findings/receipts reception | ✅ MVP |
 | Drift Detection | Read connector + actual state comparison | planned |
 
 ---
@@ -159,8 +173,8 @@ defined by `github.com/kernloom/kernloom-registries/registries/policy`.
 
 ### Natural policy intent
 
-A natural authoring layer can be added above `AccessPolicy`, but Forge still
-needs the canonical YAML before planning:
+Forge includes a small natural intent converter. It is a convenience layer.
+Forge still plans from canonical `AccessPolicy` YAML:
 
 ```text
 protect "ziti-controller"
@@ -180,7 +194,7 @@ tokens are data rather than language.
 `rate_limit`, `deny`, `network_deny`, `drop`, `tarpit`, and `quarantine`, or
 their canonical IDs from the registry.
 
-Compile that text to YAML:
+Convert that text to YAML:
 
 ```bash
 ./bin/forge intent convert \
@@ -189,7 +203,14 @@ Compile that text to YAML:
   --owner security
 ```
 
-That YAML can then move through:
+Current limits:
+
+- `protect`, `allow` and `require` are emitted into `AccessPolicy`.
+- `default deny`, `when ... then ...` and `never ...` are recognized and
+  reported as warnings.
+- Response rules and guardrails still need a dedicated compiler IR.
+
+The generated YAML can then move through:
 
 1. an `AccessPolicy` YAML document for the access intent;
 2. an `EnforcementPlan` for operator review;

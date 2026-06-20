@@ -10,6 +10,17 @@ This is the Forge-side copy/paste path for manual KLIQ tests. It shows:
 
 The KLIQ-side guide is in `kernloom/_docs/testing/manual-test-guide.md`.
 
+## v0.3.0 Quick Path
+
+- Use `forge intent convert` only to create `AccessPolicy` YAML.
+- Use `forge validate` to check the policy.
+- Use `forge compile` or `forge report` to inspect coverage and gaps.
+- Use `forge export-runtime-policy` for standalone KLIQ.
+- Use `forge build-runtime-bundle` or `forge serve` for managed KLIQ.
+- KLIQ never loads natural intent text directly.
+- `when ... then ...`, `default deny ...` and `never ...` are recognized by
+  the converter, but still produce warnings instead of runtime rules.
+
 ## Mental Model
 
 | Artifact | Created By | Used By | Purpose |
