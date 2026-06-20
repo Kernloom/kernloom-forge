@@ -257,12 +257,14 @@ Expected:
 - `manual-edge-access -> klshield-local` appears in the summary.
 - `risk_level` and `device_posture` are mapped as `compensating_control` for
   `klshield-local`.
+- Context-sensitive compensating controls include `runtimeNotes` that explain
+  how missing or unknown evidence is handled.
 - The report has no unexpected `unsupported` requirements.
 
 Debug:
 
 ```bash
-grep -E 'target:|deployable:|status:|support:|fidelity:|downgrade|compensating' \
+grep -E 'target:|deployable:|status:|support:|fidelity:|downgrade|compensating|runtimeNotes|unknown' \
   /tmp/kernloom-forge-manual/out/manual-edge-report.yaml
 ```
 
@@ -290,12 +292,13 @@ Expected:
 - `kind: RuntimePolicyPack`
 - `capability: enforce.access.deny`
 - a rule for `risk.level in ['high', 'critical']`
-- a rule for `device.posture.status in ['degraded', 'unhealthy', 'unknown']`
+- a rule for `device.posture.status in ['degraded', 'unhealthy']`
 
 Why `deny`? In the example target `klshield-local`, `risk_level` and
 `device_posture` are mapped as compensating restrictions. Forge therefore
-creates local RuntimePDP rules that treat bad or unknown evidence as
-restrictive.
+creates local RuntimePDP rules for known bad evidence. Missing or unknown
+context must stay transparent in the Forge report and must not silently become
+a hard runtime block.
 
 ## 4. Load The Pack In Standalone KLIQ
 

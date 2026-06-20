@@ -44,6 +44,36 @@ func TestBuildPolicyPackUsesKLIQContracts(t *testing.T) {
 	}
 }
 
+func TestBuildPolicyPackDoesNotDenyOnUnknownContext(t *testing.T) {
+	pack, err := bundler.BuildPolicyPack(testContextSensitiveEnforcementPlan(), testProfile(), bundler.RuntimePolicyConfig{
+		IssuedAt:   fixedNow(),
+		DefaultTTL: time.Minute,
+	})
+	if err != nil {
+		t.Fatalf("BuildPolicyPack: %v", err)
+	}
+	if len(pack.Spec.Rules) != 2 {
+		t.Fatalf("rules = %d, want 2", len(pack.Spec.Rules))
+	}
+
+	want := map[string]string{
+		"compensating-require-healthy-device-openziti-production": "device.posture.status in ['degraded', 'unhealthy']",
+		"compensating-require-mfa-openziti-production":            "session.authentication.strength in ['none', 'password']",
+	}
+	for _, rule := range pack.Spec.Rules {
+		expected, ok := want[rule.ID]
+		if !ok {
+			t.Fatalf("unexpected rule %q", rule.ID)
+		}
+		if rule.When != expected {
+			t.Fatalf("rule %q when = %q, want %q", rule.ID, rule.When, expected)
+		}
+		if strings.Contains(rule.When, "unknown") || strings.HasPrefix(rule.When, "!(") {
+			t.Fatalf("rule %q should not treat unknown or missing context as a deny trigger: %q", rule.ID, rule.When)
+		}
+	}
+}
+
 func TestBuildPolicyPackYAMLIsLoadableByKLIQShape(t *testing.T) {
 	pack, err := bundler.BuildPolicyPack(testEnforcementPlan(), testProfile(), bundler.RuntimePolicyConfig{
 		IssuedAt:   fixedNow(),
@@ -184,6 +214,51 @@ func testEnforcementPlan() *plan.EnforcementPlan {
 				RuntimeModel:         "enterprise_risk_overlay",
 				SemanticFidelity:     "medium",
 				CompensatingControls: []string{"require-low-risk"},
+			},
+		},
+	}
+}
+
+func testContextSensitiveEnforcementPlan() *plan.EnforcementPlan {
+	return &plan.EnforcementPlan{
+		APIVersion: "kernloom.io/v1alpha1",
+		Kind:       "EnforcementPlan",
+		Metadata: plan.PlanMetadata{
+			Name:         "edge-access-openziti-production",
+			SourcePolicy: "edge-access",
+			Target:       "openziti-production",
+			CompiledAt:   fixedNow(),
+		},
+		Spec: plan.EnforcementPlanSpec{
+			Requirements: []plan.RequirementEnforcement{
+				{
+					ID:              "require-healthy-device",
+					RequirementKind: "device_posture",
+					Requirement:     "device.posture.status == 'healthy'",
+					Status:          plan.StatusCompensatingControl,
+					ActionBinding: &plan.ActionBinding{
+						Action:        "remove_kernloom_access_attribute",
+						Attribute:     "kl.access.active",
+						DecisionOwner: "kernloom-runtime-pdp",
+					},
+				},
+				{
+					ID:              "require-mfa",
+					RequirementKind: "auth_strength",
+					Requirement:     "session.authentication.strength in ['mfa', 'phishing_resistant_mfa']",
+					Status:          plan.StatusCompensatingControl,
+					ActionBinding: &plan.ActionBinding{
+						Action:        "remove_kernloom_access_attribute",
+						Attribute:     "kl.access.active",
+						DecisionOwner: "kernloom-runtime-pdp",
+					},
+				},
+			},
+			Summary: plan.PlanSummary{
+				Deployable:           true,
+				RuntimeModel:         "enterprise_risk_overlay",
+				SemanticFidelity:     "medium",
+				CompensatingControls: []string{"require-healthy-device", "require-mfa"},
 			},
 		},
 	}

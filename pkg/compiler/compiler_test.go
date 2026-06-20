@@ -4,6 +4,7 @@
 package compiler_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/kernloom/kernloom-forge/pkg/compiler"
@@ -111,6 +112,10 @@ func TestGoldenInvestorApps(t *testing.T) {
 	assertRequirementStatus(t, ks, "require-mfa", plan.StatusUnsupported)
 	assertRequirementStatus(t, ks, "require-low-risk", plan.StatusCompensatingControl)
 	assertRequirementStatus(t, ks, "require-healthy-device", plan.StatusCompensatingControl)
+	postureEntry := findRequirement(t, ks, "require-healthy-device")
+	if len(postureEntry.RuntimeNotes) == 0 || !strings.Contains(postureEntry.RuntimeNotes[0], "unknown posture") {
+		t.Fatalf("require-healthy-device runtime notes should explain unknown posture semantics: %#v", postureEntry.RuntimeNotes)
+	}
 
 	// No requirements silently dropped — all appear in every plan.
 	allReqs := reqs.All()

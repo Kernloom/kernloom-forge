@@ -26,6 +26,7 @@ type ReportSetSpec struct {
 	Coverage      []CoverageReport               `yaml:"coverage" json:"coverage"`
 	Delegation    []DelegationReportEntry        `yaml:"delegation,omitempty" json:"delegation,omitempty"`
 	Downgrades    []SemanticDowngradeReportEntry `yaml:"downgrades,omitempty" json:"downgrades,omitempty"`
+	RuntimeNotes  []RuntimeNoteReportEntry       `yaml:"runtimeNotes,omitempty" json:"runtimeNotes,omitempty"`
 	ConfigPDP     []configpdp.ValidationReport   `yaml:"configPDP,omitempty" json:"configPDP,omitempty"`
 	TargetSummary []TargetIntegrationReportEntry `yaml:"targetSummary,omitempty" json:"targetSummary,omitempty"`
 }
@@ -55,6 +56,12 @@ type SemanticDowngradeReportEntry struct {
 	From        string `yaml:"from" json:"from"`
 	To          string `yaml:"to" json:"to"`
 	Reason      string `yaml:"reason" json:"reason"`
+}
+
+type RuntimeNoteReportEntry struct {
+	Target      string   `yaml:"target" json:"target"`
+	Requirement string   `yaml:"requirement" json:"requirement"`
+	Notes       []string `yaml:"notes" json:"notes"`
 }
 
 type TargetIntegrationReportEntry struct {
@@ -107,6 +114,13 @@ func Build(sourcePolicy string, plans []*plan.EnforcementPlan, validations []con
 						From: req.Downgrade.From, To: req.Downgrade.To, Reason: req.Downgrade.Reason,
 					})
 				}
+			}
+			if len(req.RuntimeNotes) > 0 {
+				rs.Spec.RuntimeNotes = append(rs.Spec.RuntimeNotes, RuntimeNoteReportEntry{
+					Target:      p.Metadata.Target,
+					Requirement: req.ID,
+					Notes:       append([]string(nil), req.RuntimeNotes...),
+				})
 			}
 		}
 		rs.Spec.Coverage = append(rs.Spec.Coverage, cov)

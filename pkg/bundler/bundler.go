@@ -299,9 +299,9 @@ func violationExpression(req plan.RequirementEnforcement) string {
 	case "risk_level":
 		return "risk.level in ['high', 'critical']"
 	case "device_posture":
-		return "device.posture.status in ['degraded', 'unhealthy', 'unknown']"
+		return "device.posture.status in ['degraded', 'unhealthy']"
 	case "auth_strength":
-		return "!(session.authentication.strength in ['mfa', 'phishing_resistant_mfa'])"
+		return "session.authentication.strength in ['none', 'password']"
 	}
 	if strings.TrimSpace(req.Requirement) == "" {
 		return ""

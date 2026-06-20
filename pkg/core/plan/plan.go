@@ -101,6 +101,11 @@ type RequirementEnforcement struct {
 	// ActionBinding describes the compensating control binding.
 	// Set only when status is compensating_control.
 	ActionBinding *ActionBinding `yaml:"actionBinding,omitempty"`
+
+	// RuntimeNotes records important compiler decisions about runtime
+	// semantics, especially where missing or unknown context is deliberately
+	// not translated into an enforcement action.
+	RuntimeNotes []string `yaml:"runtimeNotes,omitempty"`
 }
 
 // RequirementOwnership maps each enforcement concern to its named owner

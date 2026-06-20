@@ -18,6 +18,7 @@ func TestBuildReportSet(t *testing.T) {
 				{ID: "implemented", Status: plan.StatusImplemented},
 				{ID: "delegated", Status: plan.StatusDelegated, Delegation: &plan.DelegationNote{EvaluationOwner: "vendor"}},
 				{ID: "downgraded", Status: plan.StatusPartial, Downgrade: &plan.DowngradeNote{From: "a", To: "b", Reason: "test"}},
+				{ID: "context-sensitive", Status: plan.StatusCompensatingControl, RuntimeNotes: []string{"missing context is not a deny trigger"}},
 			},
 			Summary: plan.PlanSummary{
 				Deployable:       true,
@@ -30,5 +31,8 @@ func TestBuildReportSet(t *testing.T) {
 	}}, nil)
 	if len(rs.Spec.Coverage) != 1 || len(rs.Spec.Delegation) != 1 || len(rs.Spec.Downgrades) != 1 {
 		t.Fatalf("unexpected report set: %#v", rs.Spec)
+	}
+	if len(rs.Spec.RuntimeNotes) != 1 || rs.Spec.RuntimeNotes[0].Requirement != "context-sensitive" {
+		t.Fatalf("runtime notes were not surfaced: %#v", rs.Spec.RuntimeNotes)
 	}
 }

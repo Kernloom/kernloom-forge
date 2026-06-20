@@ -191,6 +191,7 @@ func compileRequirement(
 			Attribute:     b.Attribute,
 			DecisionOwner: b.DecisionOwner,
 		}
+		entry.RuntimeNotes = runtimeNotesForRequirement(req.Kind)
 		entry.Ownership = &plan.RequirementOwnership{
 			RiskAssessmentOwner:      b.RiskAssessmentOwner,
 			EnterpriseDecisionOwner:  b.DecisionOwner,
@@ -204,6 +205,25 @@ func compileRequirement(
 	}
 
 	return entry
+}
+
+func runtimeNotesForRequirement(kind string) []string {
+	switch kind {
+	case requirement.KindDevicePosture:
+		return []string{
+			"Runtime deny rules block only known non-healthy posture values; missing or unknown posture is reported as missing evidence and is not a deny trigger.",
+		}
+	case requirement.KindAuthStrength:
+		return []string{
+			"Runtime deny rules block only known weak authentication strengths; missing authentication context is reported as missing evidence and is not a deny trigger.",
+		}
+	case requirement.KindRiskLevel:
+		return []string{
+			"Runtime deny rules block high and critical risk only; unknown risk is insufficient evidence and is not treated as low risk.",
+		}
+	default:
+		return nil
+	}
 }
 
 // aggregateFidelity returns the lowest fidelity across all mapped requirements.
