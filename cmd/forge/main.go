@@ -66,6 +66,7 @@ func serveCmd() *cobra.Command {
 	var addr, adaptersDir, profilesDir, policyFile, target, signingKey, runtimeMode, failover, enrollTokenStore string
 	var enrollTokens []string
 	var guardrailFiles []string
+	var detectionFiles []string
 	var responseFiles []string
 	var alertRouteFiles []string
 	var generation int
@@ -97,6 +98,10 @@ func serveCmd() *cobra.Command {
 				srvLog.Printf("using enrollment token store %s", enrollTokenStore)
 			}
 			guardrails, err := loadRuntimeGuardrails(guardrailFiles)
+			if err != nil {
+				return err
+			}
+			detectionRules, err := loadRuntimeDetectionRules(detectionFiles)
 			if err != nil {
 				return err
 			}
@@ -134,6 +139,7 @@ func serveCmd() *cobra.Command {
 						FailoverBehavior:  failover,
 						DefaultTTL:        ttl,
 						Guardrails:        guardrails,
+						DetectionRules:    detectionRules,
 						ResponseRules:     responseRules,
 						AlertRoutes:       alertRoutes,
 					}, priv)
@@ -162,6 +168,7 @@ func serveCmd() *cobra.Command {
 	cmd.Flags().StringVar(&target, "target", "", "TargetIntegrationProfile metadata.name for generated bundles")
 	cmd.Flags().StringVar(&signingKey, "signing-key", "", "PEM Ed25519 private key for generated bundles")
 	cmd.Flags().StringArrayVar(&guardrailFiles, "guardrail", nil, "GuardrailPolicy YAML file to include in served RuntimeBundles (repeatable)")
+	cmd.Flags().StringArrayVar(&detectionFiles, "detection", nil, "DetectionPolicy YAML file to include in served RuntimeBundles (repeatable)")
 	cmd.Flags().StringArrayVar(&responseFiles, "response", nil, "ResponsePolicy YAML file to include in served RuntimeBundles (repeatable)")
 	cmd.Flags().StringArrayVar(&alertRouteFiles, "alert-route", nil, "AlertRoute YAML file to include in served RuntimeBundles (repeatable)")
 	cmd.Flags().IntVar(&generation, "generation", 1, "bundle generation")

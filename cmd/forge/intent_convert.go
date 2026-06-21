@@ -24,7 +24,7 @@ func intentCmd() *cobra.Command {
 }
 
 func intentConvertCmd() *cobra.Command {
-	var input, output, guardrailsOutput, responseOutput, name, owner, subjectType, resourceType string
+	var input, output, guardrailsOutput, detectionOutput, responseOutput, name, owner, subjectType, resourceType string
 
 	cmd := &cobra.Command{
 		Use:   "convert",
@@ -43,6 +43,7 @@ func intentConvertCmd() *cobra.Command {
 				Owner:               owner,
 				DefaultSubjectType:  subjectType,
 				DefaultResourceType: resourceType,
+				EmitDetectionIR:     detectionOutput != "",
 			})
 			if err != nil {
 				return err
@@ -61,6 +62,20 @@ func intentConvertCmd() *cobra.Command {
 					return err
 				}
 				if err := os.WriteFile(guardrailsOutput, guardrailYAML, 0o644); err != nil {
+					return err
+				}
+			}
+			if detectionOutput != "" && len(result.DetectionRules) > 0 {
+				detectionName := name
+				if detectionName == "" {
+					detectionName = result.Policy.Metadata.Name + "-detections"
+				}
+				detectionPolicy := response.DetectionPolicyFromRuntime(detectionName, result.DetectionRules)
+				detectionYAML, err := yaml.Marshal(detectionPolicy)
+				if err != nil {
+					return err
+				}
+				if err := os.WriteFile(detectionOutput, detectionYAML, 0o644); err != nil {
 					return err
 				}
 			}
@@ -93,6 +108,7 @@ func intentConvertCmd() *cobra.Command {
 	cmd.Flags().StringVar(&input, "input", "", "natural policy intent file (required)")
 	cmd.Flags().StringVar(&output, "output", "-", "AccessPolicy YAML output path, or '-' for stdout")
 	cmd.Flags().StringVar(&guardrailsOutput, "guardrails-output", "", "optional GuardrailPolicy YAML output path for never/max action statements")
+	cmd.Flags().StringVar(&detectionOutput, "detection-output", "", "optional DetectionPolicy YAML output path for when conditions")
 	cmd.Flags().StringVar(&responseOutput, "response-output", "", "optional ResponsePolicy YAML output path for when/then response statements")
 	cmd.Flags().StringVar(&name, "name", "", "override metadata.name")
 	cmd.Flags().StringVar(&owner, "owner", "", "metadata.owner")

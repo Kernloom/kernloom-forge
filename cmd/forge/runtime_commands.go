@@ -30,6 +30,7 @@ import (
 func exportRuntimePolicyCmd() *cobra.Command {
 	var policyFile, adaptersDir, profilesDir, target, output string
 	var guardrailFiles []string
+	var detectionFiles []string
 	var responseFiles []string
 	var alertRouteFiles []string
 	var ttl time.Duration
@@ -49,6 +50,10 @@ func exportRuntimePolicyCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			detectionRules, err := loadRuntimeDetectionRules(detectionFiles)
+			if err != nil {
+				return err
+			}
 			responseRules, err := loadRuntimeResponseRules(responseFiles)
 			if err != nil {
 				return err
@@ -58,12 +63,13 @@ func exportRuntimePolicyCmd() *cobra.Command {
 				return err
 			}
 			pack, err := bundler.BuildPolicyPack(ep, prof, bundler.RuntimePolicyConfig{
-				Name:          pol.Metadata.Name + "-" + prof.Metadata.Name,
-				IssuedAt:      time.Now().UTC(),
-				DefaultTTL:    ttl,
-				Guardrails:    guardrails,
-				ResponseRules: responseRules,
-				AlertRoutes:   alertRoutes,
+				Name:           pol.Metadata.Name + "-" + prof.Metadata.Name,
+				IssuedAt:       time.Now().UTC(),
+				DefaultTTL:     ttl,
+				Guardrails:     guardrails,
+				DetectionRules: detectionRules,
+				ResponseRules:  responseRules,
+				AlertRoutes:    alertRoutes,
 			})
 			if err != nil {
 				return err
@@ -76,6 +82,7 @@ func exportRuntimePolicyCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&output, "output", "o", "", "output file (default stdout)")
 	cmd.Flags().DurationVar(&ttl, "ttl", 0, "default runtime action TTL (default depends on target mode)")
 	cmd.Flags().StringArrayVar(&guardrailFiles, "guardrail", nil, "GuardrailPolicy YAML file to include in the RuntimePolicyPack (repeatable)")
+	cmd.Flags().StringArrayVar(&detectionFiles, "detection", nil, "DetectionPolicy YAML file to include in the RuntimePolicyPack (repeatable)")
 	cmd.Flags().StringArrayVar(&responseFiles, "response", nil, "ResponsePolicy YAML file to include in the RuntimePolicyPack (repeatable)")
 	cmd.Flags().StringArrayVar(&alertRouteFiles, "alert-route", nil, "AlertRoute YAML file to include in the RuntimePolicyPack (repeatable)")
 	_ = cmd.MarkFlagRequired("target")
@@ -85,6 +92,7 @@ func exportRuntimePolicyCmd() *cobra.Command {
 func buildRuntimeBundleCmd() *cobra.Command {
 	var policyFile, adaptersDir, profilesDir, target, output, signingKey, keyID, nodeID, mode, failover string
 	var guardrailFiles []string
+	var detectionFiles []string
 	var responseFiles []string
 	var alertRouteFiles []string
 	var generation int
@@ -102,6 +110,10 @@ func buildRuntimeBundleCmd() *cobra.Command {
 				return err
 			}
 			guardrails, err := loadRuntimeGuardrails(guardrailFiles)
+			if err != nil {
+				return err
+			}
+			detectionRules, err := loadRuntimeDetectionRules(detectionFiles)
 			if err != nil {
 				return err
 			}
@@ -127,6 +139,7 @@ func buildRuntimeBundleCmd() *cobra.Command {
 				FailoverBehavior:  failover,
 				DefaultTTL:        ttl,
 				Guardrails:        guardrails,
+				DetectionRules:    detectionRules,
 				ResponseRules:     responseRules,
 				AlertRoutes:       alertRoutes,
 			}, priv)
@@ -150,6 +163,7 @@ func buildRuntimeBundleCmd() *cobra.Command {
 	cmd.Flags().DurationVar(&validFor, "valid-for", 24*time.Hour, "bundle validity duration")
 	cmd.Flags().DurationVar(&ttl, "ttl", 0, "default runtime action TTL")
 	cmd.Flags().StringArrayVar(&guardrailFiles, "guardrail", nil, "GuardrailPolicy YAML file to include in the RuntimeBundle policy pack (repeatable)")
+	cmd.Flags().StringArrayVar(&detectionFiles, "detection", nil, "DetectionPolicy YAML file to include in the RuntimeBundle policy pack (repeatable)")
 	cmd.Flags().StringArrayVar(&responseFiles, "response", nil, "ResponsePolicy YAML file to include in the RuntimeBundle policy pack (repeatable)")
 	cmd.Flags().StringArrayVar(&alertRouteFiles, "alert-route", nil, "AlertRoute YAML file to include in the RuntimeBundle policy pack (repeatable)")
 	cmd.Flags().StringVarP(&output, "output", "o", "", "output file (default stdout)")
@@ -335,6 +349,22 @@ func loadRuntimeResponseRules(paths []string) ([]contracts.RuntimeResponseRule, 
 		rules, err := p.RuntimeResponseRules()
 		if err != nil {
 			return nil, fmt.Errorf("response %s: %w", path, err)
+		}
+		out = append(out, rules...)
+	}
+	return out, nil
+}
+
+func loadRuntimeDetectionRules(paths []string) ([]contracts.RuntimeDetectionRule, error) {
+	var out []contracts.RuntimeDetectionRule
+	for _, path := range paths {
+		p, err := response.LoadDetectionPolicyFromFile(path)
+		if err != nil {
+			return nil, err
+		}
+		rules, err := p.RuntimeDetectionRules()
+		if err != nil {
+			return nil, fmt.Errorf("detection %s: %w", path, err)
 		}
 		out = append(out, rules...)
 	}

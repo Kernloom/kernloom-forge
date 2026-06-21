@@ -7,12 +7,9 @@ spec:
   stateRequired: true
   conflictResolution: strongest_allowed_action
   rules:
-    - id: denied-access-ziti-controller-alert-route-security-ops
+    - id: on-denied-access-ziti-controller-exceeds-5-within-15m0s-alert-route-security-ops
       when:
-        type: access.denied_threshold
-        resourceRef: ziti-controller
-        threshold: 5
-        window: 15m
+        detection: denied-access-ziti-controller-exceeds-5-within-15m0s
       then:
         action:
           id: notify.alert.emit
@@ -20,4 +17,4 @@ spec:
           severity: medium
           dedupe: 15m
       reasonCodes:
-        - denied_access_threshold_exceeded
+        - response_on_denied_access_ziti_controller_exceeds_5_within_15m0s

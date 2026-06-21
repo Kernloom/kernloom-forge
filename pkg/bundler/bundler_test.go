@@ -31,13 +31,22 @@ func TestBuildPolicyPackUsesKLIQContracts(t *testing.T) {
 			},
 			ForbiddenActions: []string{"enforce.access.deny"},
 		}},
+		DetectionRules: []contracts.RuntimeDetectionRule{{
+			ID:          "admin-deny",
+			Type:        "access.denied_threshold",
+			ResourceRef: "ziti-controller",
+			Subject: contracts.RuntimeDetectionSubject{
+				Type: "group",
+				Ref:  "kernloom-admins",
+			},
+			Threshold: 5,
+			Window:    contracts.NewDuration(15 * time.Minute),
+			Scope:     "source",
+		}},
 		ResponseRules: []contracts.RuntimeResponseRule{{
 			ID: "denied-access-alert",
 			When: contracts.RuntimeResponseTrigger{
-				Type:        "access.denied_threshold",
-				ResourceRef: "ziti-controller",
-				Threshold:   5,
-				Window:      contracts.NewDuration(15 * time.Minute),
+				Detection: "admin-deny",
 			},
 			Then: []contracts.RuntimeResponseAction{{
 				ID:       "notify.alert.emit",
@@ -80,7 +89,10 @@ func TestBuildPolicyPackUsesKLIQContracts(t *testing.T) {
 	if pack.Spec.Guardrails[0].Subject.Ref != "kernloom-admins" {
 		t.Fatalf("guardrail not preserved: %#v", pack.Spec.Guardrails[0])
 	}
-	if len(pack.Spec.ResponseRules) != 1 || pack.Spec.ResponseRules[0].Then[0].Route != "alert-route.security-ops" {
+	if len(pack.Spec.DetectionRules) != 1 || pack.Spec.DetectionRules[0].ID != "admin-deny" {
+		t.Fatalf("detection rules not preserved: %#v", pack.Spec.DetectionRules)
+	}
+	if len(pack.Spec.ResponseRules) != 1 || pack.Spec.ResponseRules[0].When.Detection != "admin-deny" || pack.Spec.ResponseRules[0].Then[0].Route != "alert-route.security-ops" {
 		t.Fatalf("response rules not preserved: %#v", pack.Spec.ResponseRules)
 	}
 	if len(pack.Spec.AlertRoutes) != 1 || pack.Spec.AlertRoutes[0].ID != "alert-route.security-ops" {

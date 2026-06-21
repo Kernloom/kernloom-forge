@@ -22,13 +22,15 @@ type Options struct {
 	Owner               string
 	DefaultSubjectType  string
 	DefaultResourceType string
+	EmitDetectionIR     bool
 }
 
 type Result struct {
-	Policy        *intent.AccessPolicy
-	Guardrails    []contracts.RuntimeGuardrail
-	ResponseRules []contracts.RuntimeResponseRule
-	Warnings      []string
+	Policy         *intent.AccessPolicy
+	Guardrails     []contracts.RuntimeGuardrail
+	DetectionRules []contracts.RuntimeDetectionRule
+	ResponseRules  []contracts.RuntimeResponseRule
+	Warnings       []string
 }
 
 func Convert(data []byte, opts Options) (*Result, error) {
@@ -48,10 +50,13 @@ func Convert(data []byte, opts Options) (*Result, error) {
 		conditions   []intent.Condition
 		conditionIDs map[string]int
 		guardrails   []contracts.RuntimeGuardrail
+		detections   []contracts.RuntimeDetectionRule
+		detectionIDs map[string]bool
 		responses    []contracts.RuntimeResponseRule
 		warnings     []string
 	)
 	conditionIDs = map[string]int{}
+	detectionIDs = map[string]bool{}
 
 	for lineNo, raw := range strings.Split(string(data), "\n") {
 		line := stripComment(strings.TrimSpace(raw))
@@ -107,9 +112,20 @@ func Convert(data []byte, opts Options) (*Result, error) {
 			}
 			if rule.ResourceRef != "" {
 				runtimeRule := rule.RuntimeRule()
+				if opts.EmitDetectionIR {
+					detectionRule := rule.DetectionRule()
+					if !detectionIDs[detectionRule.ID] {
+						detections = append(detections, detectionRule)
+						detectionIDs[detectionRule.ID] = true
+					}
+					runtimeRule = rule.RuntimeRuleForDetection(detectionRule.ID)
+				}
 				responses = append(responses, runtimeRule)
 				action := runtimeRule.Then[0]
 				warning := fmt.Sprintf("line %d: response rule %q is emitted as ResponsePolicy IR, not into AccessPolicy", lineNo+1, runtimeRule.ID)
+				if opts.EmitDetectionIR {
+					warning = fmt.Sprintf("line %d: detection %q and response rule %q are emitted as DetectionPolicy/ResponsePolicy IR, not into AccessPolicy", lineNo+1, runtimeRule.When.Detection, runtimeRule.ID)
+				}
 				if action.ID == "notify.alert.emit" {
 					warning += fmt.Sprintf(" (alert route %q severity %q dedupe %s)", action.Route, action.Severity, action.Dedupe)
 				}
@@ -174,7 +190,7 @@ func Convert(data []byte, opts Options) (*Result, error) {
 	if err := pol.Validate(); err != nil {
 		return nil, err
 	}
-	return &Result{Policy: pol, Guardrails: guardrails, ResponseRules: responses, Warnings: warnings}, nil
+	return &Result{Policy: pol, Guardrails: guardrails, DetectionRules: detections, ResponseRules: responses, Warnings: warnings}, nil
 }
 
 type responseRule struct {
@@ -202,6 +218,41 @@ func (r responseRule) RuntimeRule() contracts.RuntimeResponseRule {
 			"denied_access_threshold_exceeded",
 		},
 	}
+}
+
+func (r responseRule) RuntimeRuleForDetection(detectionID string) contracts.RuntimeResponseRule {
+	actionSlug := slug(r.Action.ID)
+	if r.Action.Route != "" {
+		actionSlug = slug(r.Action.Route)
+	}
+	return contracts.RuntimeResponseRule{
+		ID: "on-" + slug(detectionID) + "-" + actionSlug,
+		When: contracts.RuntimeResponseTrigger{
+			Detection: detectionID,
+		},
+		Then: []contracts.RuntimeResponseAction{r.Action},
+		ReasonCodes: []string{
+			"response_on_" + strings.ReplaceAll(slug(detectionID), "-", "_"),
+		},
+	}
+}
+
+func (r responseRule) DetectionRule() contracts.RuntimeDetectionRule {
+	return contracts.RuntimeDetectionRule{
+		ID:          r.detectionID(),
+		Type:        "access.denied_threshold",
+		ResourceRef: r.ResourceRef,
+		Threshold:   r.Threshold,
+		Window:      contracts.NewDuration(r.Window),
+		Scope:       "source",
+		ReasonCodes: []string{
+			"denied_access_threshold_exceeded",
+		},
+	}
+}
+
+func (r responseRule) detectionID() string {
+	return "denied-access-" + slug(r.ResourceRef) + "-exceeds-" + strconv.Itoa(r.Threshold) + "-within-" + slug(r.Window.String())
 }
 
 func parseWhen(tokens []string) (responseRule, error) {

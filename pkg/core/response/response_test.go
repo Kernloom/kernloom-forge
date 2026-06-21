@@ -47,6 +47,44 @@ func TestResponsePolicyRuntimeRules(t *testing.T) {
 	}
 }
 
+func TestDetectionPolicyRuntimeRules(t *testing.T) {
+	p := DetectionPolicy{
+		APIVersion: "kernloom.io/v1",
+		Kind:       KindDetectionPolicy,
+		Metadata:   Metadata{Name: "ziti-detections"},
+		Spec: DetectionSpec{Rules: []DetectionRule{{
+			ID: "admin-deny",
+			When: DetectionWhen{
+				Type:        "access.denied_threshold",
+				ResourceRef: "ziti-controller",
+				Subject: DetectionSubject{
+					Type: "group",
+					Ref:  "kernloom-admins",
+				},
+				Threshold: 3,
+				Window:    "15m",
+				Scope:     "source",
+			},
+		}}},
+	}
+	if err := p.Validate(); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	rules, err := p.RuntimeDetectionRules()
+	if err != nil {
+		t.Fatalf("runtime rules: %v", err)
+	}
+	if len(rules) != 1 {
+		t.Fatalf("rules = %d", len(rules))
+	}
+	if got := rules[0].Subject.Ref; got != "kernloom-admins" {
+		t.Fatalf("subject ref = %q", got)
+	}
+	if got := rules[0].Window.Duration; got != 15*time.Minute {
+		t.Fatalf("window = %s", got)
+	}
+}
+
 func TestAlertRouteRuntimeRoute(t *testing.T) {
 	route := AlertRoute{
 		APIVersion: "kernloom.io/v1",

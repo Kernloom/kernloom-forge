@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MPL-2.0
 // Copyright (c) 2026 Kernloom Contributors
 
-// Package response defines authored response policies and alert routes, then
-// compiles them into the runtime response IR carried by RuntimePolicyPack.
+// Package response defines authored detection policies, response policies and
+// alert routes, then compiles them into the runtime IR carried by
+// RuntimePolicyPack.
 package response
 
 import (
@@ -16,8 +17,9 @@ import (
 )
 
 const (
-	KindResponsePolicy = "ResponsePolicy"
-	KindAlertRoute     = "AlertRoute"
+	KindDetectionPolicy = "DetectionPolicy"
+	KindResponsePolicy  = "ResponsePolicy"
+	KindAlertRoute      = "AlertRoute"
 )
 
 type Metadata struct {
@@ -84,6 +86,40 @@ type AlertRoute struct {
 	Spec       AlertRouteSpec `yaml:"spec"`
 }
 
+type DetectionPolicy struct {
+	APIVersion string        `yaml:"apiVersion"`
+	Kind       string        `yaml:"kind"`
+	Metadata   Metadata      `yaml:"metadata"`
+	Spec       DetectionSpec `yaml:"spec"`
+}
+
+type DetectionSpec struct {
+	Rules []DetectionRule `yaml:"rules"`
+}
+
+type DetectionRule struct {
+	ID          string        `yaml:"id"`
+	Description string        `yaml:"description,omitempty"`
+	When        DetectionWhen `yaml:"when"`
+	ReasonCodes []string      `yaml:"reasonCodes,omitempty"`
+}
+
+type DetectionWhen struct {
+	Type        string           `yaml:"type"`
+	Subject     DetectionSubject `yaml:"subject,omitempty"`
+	ResourceRef string           `yaml:"resourceRef,omitempty"`
+	Threshold   int              `yaml:"threshold,omitempty"`
+	Window      string           `yaml:"window,omitempty"`
+	Scope       string           `yaml:"scope,omitempty"`
+	Params      map[string]any   `yaml:"params,omitempty"`
+}
+
+type DetectionSubject struct {
+	Type     string `yaml:"type,omitempty"`
+	Ref      string `yaml:"ref,omitempty"`
+	Selector string `yaml:"selector,omitempty"`
+}
+
 type AlertRouteSpec struct {
 	Audience        Audience          `yaml:"audience,omitempty"`
 	Channels        []Channel         `yaml:"channels,omitempty"`
@@ -142,6 +178,21 @@ func LoadPolicyFromFile(path string) (*Policy, error) {
 	return &p, nil
 }
 
+func LoadDetectionPolicyFromFile(path string) (*DetectionPolicy, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("reading %s: %w", path, err)
+	}
+	var p DetectionPolicy
+	if err := yaml.Unmarshal(data, &p); err != nil {
+		return nil, fmt.Errorf("parsing DetectionPolicy %s: %w", path, err)
+	}
+	if err := p.Validate(); err != nil {
+		return nil, fmt.Errorf("invalid DetectionPolicy %s: %w", path, err)
+	}
+	return &p, nil
+}
+
 func LoadAlertRouteFromFile(path string) (*AlertRoute, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -155,6 +206,38 @@ func LoadAlertRouteFromFile(path string) (*AlertRoute, error) {
 		return nil, fmt.Errorf("invalid AlertRoute %s: %w", path, err)
 	}
 	return &route, nil
+}
+
+func (p *DetectionPolicy) Validate() error {
+	if p.APIVersion == "" {
+		return fmt.Errorf("apiVersion is required")
+	}
+	if p.Kind != KindDetectionPolicy {
+		return fmt.Errorf("kind must be %s, got %q", KindDetectionPolicy, p.Kind)
+	}
+	if p.Metadata.Name == "" && p.Metadata.ID == "" {
+		return fmt.Errorf("metadata.name or metadata.id is required")
+	}
+	if len(p.Spec.Rules) == 0 {
+		return fmt.Errorf("spec.rules must not be empty")
+	}
+	for i, rule := range p.Spec.Rules {
+		if rule.ID == "" {
+			return fmt.Errorf("spec.rules[%d].id is required", i)
+		}
+		if rule.When.Type == "" {
+			return fmt.Errorf("spec.rules[%d] (%s): when.type is required", i, rule.ID)
+		}
+		if rule.When.Threshold < 0 {
+			return fmt.Errorf("spec.rules[%d] (%s): when.threshold must not be negative", i, rule.ID)
+		}
+		if rule.When.Window != "" {
+			if _, err := time.ParseDuration(rule.When.Window); err != nil {
+				return fmt.Errorf("spec.rules[%d] (%s): when.window: %w", i, rule.ID, err)
+			}
+		}
+	}
+	return nil
 }
 
 func (p *Policy) Validate() error {
@@ -238,6 +321,37 @@ func (p *Policy) RuntimeResponseRules() ([]contracts.RuntimeResponseRule, error)
 	return out, nil
 }
 
+func (p *DetectionPolicy) RuntimeDetectionRules() ([]contracts.RuntimeDetectionRule, error) {
+	out := make([]contracts.RuntimeDetectionRule, 0, len(p.Spec.Rules))
+	for _, rule := range p.Spec.Rules {
+		window, err := durationOrZero(rule.When.Window)
+		if err != nil {
+			return nil, fmt.Errorf("rule %s window: %w", rule.ID, err)
+		}
+		reasons := append([]string(nil), rule.ReasonCodes...)
+		if len(reasons) == 0 {
+			reasons = []string{"detection_" + sanitizeReason(rule.ID)}
+		}
+		out = append(out, contracts.RuntimeDetectionRule{
+			ID:          rule.ID,
+			Description: rule.Description,
+			Type:        rule.When.Type,
+			Subject: contracts.RuntimeDetectionSubject{
+				Type:     rule.When.Subject.Type,
+				Ref:      rule.When.Subject.Ref,
+				Selector: rule.When.Subject.Selector,
+			},
+			ResourceRef: rule.When.ResourceRef,
+			Threshold:   rule.When.Threshold,
+			Window:      window,
+			Scope:       rule.When.Scope,
+			Params:      rule.When.Params,
+			ReasonCodes: reasons,
+		})
+	}
+	return out, nil
+}
+
 func (route *AlertRoute) RuntimeAlertRoute() (contracts.RuntimeAlertRoute, error) {
 	dedupeWindow, err := durationOrZero(route.Spec.Deduplication.Window)
 	if err != nil {
@@ -296,6 +410,7 @@ func PolicyFromRuntime(name string, rules []contracts.RuntimeResponseRule) Polic
 			Description: rule.Description,
 			When: Trigger{
 				Type:        rule.When.Type,
+				Detection:   rule.When.Detection,
 				ResourceRef: rule.When.ResourceRef,
 				Threshold:   rule.When.Threshold,
 				Window:      rule.When.Window.String(),
@@ -327,6 +442,36 @@ func PolicyFromRuntime(name string, rules []contracts.RuntimeResponseRule) Polic
 			ConflictResolution: "strongest_allowed_action",
 			Rules:              out,
 		},
+	}
+}
+
+func DetectionPolicyFromRuntime(name string, rules []contracts.RuntimeDetectionRule) DetectionPolicy {
+	out := make([]DetectionRule, 0, len(rules))
+	for _, rule := range rules {
+		out = append(out, DetectionRule{
+			ID:          rule.ID,
+			Description: rule.Description,
+			When: DetectionWhen{
+				Type: rule.Type,
+				Subject: DetectionSubject{
+					Type:     rule.Subject.Type,
+					Ref:      rule.Subject.Ref,
+					Selector: rule.Subject.Selector,
+				},
+				ResourceRef: rule.ResourceRef,
+				Threshold:   rule.Threshold,
+				Window:      durationString(rule.Window),
+				Scope:       rule.Scope,
+				Params:      rule.Params,
+			},
+			ReasonCodes: append([]string(nil), rule.ReasonCodes...),
+		})
+	}
+	return DetectionPolicy{
+		APIVersion: "kernloom.io/v1",
+		Kind:       KindDetectionPolicy,
+		Metadata:   Metadata{Name: name},
+		Spec:       DetectionSpec{Rules: out},
 	}
 }
 
@@ -377,12 +522,32 @@ func runtimeTrigger(trigger Trigger) (contracts.RuntimeResponseTrigger, error) {
 	}
 	return contracts.RuntimeResponseTrigger{
 		Type:        trigger.Type,
+		Detection:   trigger.Detection,
 		ResourceRef: trigger.ResourceRef,
 		Threshold:   trigger.Threshold,
 		Window:      window,
 		Scope:       trigger.Scope,
 		Params:      trigger.Params,
 	}, nil
+}
+
+func sanitizeReason(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	var out strings.Builder
+	lastUnderscore := false
+	for _, r := range s {
+		ok := (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')
+		if ok {
+			out.WriteRune(r)
+			lastUnderscore = false
+			continue
+		}
+		if !lastUnderscore {
+			out.WriteByte('_')
+			lastUnderscore = true
+		}
+	}
+	return strings.Trim(out.String(), "_")
 }
 
 func runtimeAction(action Action) (contracts.RuntimeResponseAction, error) {

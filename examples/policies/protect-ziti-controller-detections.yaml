@@ -1,0 +1,15 @@
+apiVersion: kernloom.io/v1
+kind: DetectionPolicy
+metadata:
+  name: protect-ziti-controller-detections
+spec:
+  rules:
+    - id: denied-access-ziti-controller-exceeds-5-within-15m0s
+      when:
+        type: access.denied_threshold
+        resourceRef: ziti-controller
+        threshold: 5
+        window: 15m
+        scope: source
+      reasonCodes:
+        - denied_access_threshold_exceeded

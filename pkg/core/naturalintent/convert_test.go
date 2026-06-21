@@ -52,6 +52,9 @@ never auto_block group "kernloom-admins"
 	if len(result.ResponseRules) != 1 {
 		t.Fatalf("response rules = %#v", result.ResponseRules)
 	}
+	if len(result.DetectionRules) != 0 {
+		t.Fatalf("detection rules should require EmitDetectionIR: %#v", result.DetectionRules)
+	}
 	if got := result.ResponseRules[0].Then[0].ID; got != "notify.alert.emit" {
 		t.Fatalf("response action = %q", got)
 	}
@@ -66,6 +69,53 @@ never auto_block group "kernloom-admins"
 	}
 	if got := result.Guardrails[0].Subject.Ref; got != "kernloom-admins" {
 		t.Fatalf("guardrail subject = %q", got)
+	}
+}
+
+func TestConvertCanSplitDetectionAndResponseIR(t *testing.T) {
+	result, err := Convert([]byte(`
+protect "ziti-controller"
+when denied access to "ziti-controller" exceeds 5 within 15m then alert route "security-ops" severity "medium" dedupe 15m
+`), Options{EmitDetectionIR: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.DetectionRules) != 1 {
+		t.Fatalf("detection rules = %#v", result.DetectionRules)
+	}
+	if got := result.DetectionRules[0].ID; got != "denied-access-ziti-controller-exceeds-5-within-15m0s" {
+		t.Fatalf("detection id = %q", got)
+	}
+	if len(result.ResponseRules) != 1 {
+		t.Fatalf("response rules = %#v", result.ResponseRules)
+	}
+	if got := result.ResponseRules[0].When.Detection; got != result.DetectionRules[0].ID {
+		t.Fatalf("response detection = %q", got)
+	}
+	if got := result.ResponseRules[0].When.Type; got != "" {
+		t.Fatalf("response trigger type should move to detection, got %q", got)
+	}
+}
+
+func TestConvertDeduplicatesDetectionIR(t *testing.T) {
+	result, err := Convert([]byte(`
+protect "ziti-controller"
+when denied access to "ziti-controller" exceeds 5 within 15m then alert route "security-ops" severity "medium" dedupe 15m
+when denied access to "ziti-controller" exceeds 5 within 15m then rate_limit for 5m
+`), Options{EmitDetectionIR: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.DetectionRules) != 1 {
+		t.Fatalf("detection rules = %#v", result.DetectionRules)
+	}
+	if len(result.ResponseRules) != 2 {
+		t.Fatalf("response rules = %#v", result.ResponseRules)
+	}
+	for _, rule := range result.ResponseRules {
+		if got := rule.When.Detection; got != result.DetectionRules[0].ID {
+			t.Fatalf("response detection = %q", got)
+		}
 	}
 }
 

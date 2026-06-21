@@ -9,7 +9,7 @@ KLIQ enforces locally via its PEP adapters (KLShield, netfilter, OpenZiti, …).
 
 ## Current Release Line
 
-`v0.3.0` focuses on the Forge-to-KLIQ runtime path:
+`v0.3.x` focuses on the Forge-to-KLIQ runtime path:
 
 - Write or convert an `AccessPolicy`.
 - Compile reports and enforcement plans.
@@ -53,6 +53,7 @@ A policy written once compiles against multiple targets simultaneously. Each tar
 | `pkg/core/plan/` | EnforcementPlan — compiler governance output | ✅ |
 | `pkg/core/context/` | ContextFact, VendorAssessment, ContextSnapshot, Registry | ✅ |
 | `pkg/core/risk/` | RiskAssessment, RiskModel, deterministic Risk Engine | ✅ |
+| `pkg/core/response/` | DetectionPolicy, ResponsePolicy, AlertRoute runtime IR | MVP |
 | `pkg/core/bundle/` | Historical Forge bundle model | legacy |
 | `pkg/core/naturalintent/` | Simple natural intent parser/converter to `AccessPolicy` | MVP |
 | `pkg/bundler/` | Build KLIQ `kernloom-contracts` RuntimePolicyPack/RuntimeBundle + Sign/Verify (Ed25519) | ✅ |
@@ -138,8 +139,9 @@ Add `--guardrail <GuardrailPolicy.yaml>` to `export-runtime-policy`,
 `build-runtime-bundle`, or `serve` when the runtime artifact should include
 safety invariants such as "never auto-block admins".
 
-Add `--response <ResponsePolicy.yaml>` and `--alert-route <AlertRoute.yaml>`
-when the runtime artifact should carry response rules and routed alerts.
+Add `--detection <DetectionPolicy.yaml>`, `--response <ResponsePolicy.yaml>`,
+and `--alert-route <AlertRoute.yaml>` when the runtime artifact should carry
+detection rules, response rules and routed alerts.
 
 ---
 
@@ -208,6 +210,7 @@ Convert that text to YAML:
   --input examples/policies/protect-ziti-controller.intent \
   --output /tmp/protect-ziti-controller.yaml \
   --guardrails-output /tmp/protect-ziti-controller-guardrails.yaml \
+  --detection-output /tmp/protect-ziti-controller-detections.yaml \
   --response-output /tmp/protect-ziti-controller-responses.yaml \
   --owner security
 ```
@@ -217,6 +220,8 @@ Current limits:
 - `protect`, `allow` and `require` are emitted into `AccessPolicy`.
 - `never ...` can be emitted into a separate `GuardrailPolicy` with
   `--guardrails-output`.
+- `when ...` can be emitted into a separate `DetectionPolicy` with
+  `--detection-output`.
 - `when ... then alert route ...` can be emitted into a separate
   `ResponsePolicy` with `--response-output`.
 - `default deny` is recognized and reported as a warning for now.
@@ -226,11 +231,12 @@ The generated YAML can then move through:
 
 1. an `AccessPolicy` YAML document for the access intent;
 2. an optional `GuardrailPolicy` YAML document for safety invariants;
-3. an optional `ResponsePolicy` YAML document for response actions;
-4. optional `AlertRoute` YAML documents for notification routing;
-5. an `EnforcementPlan` for operator review;
-6. a `RuntimePolicyPack` for standalone KLIQ via `export-runtime-policy`;
-7. a signed `RuntimeBundle` for managed KLIQ via `build-runtime-bundle` or
+3. an optional `DetectionPolicy` YAML document for stateful runtime detections;
+4. an optional `ResponsePolicy` YAML document for response actions;
+5. optional `AlertRoute` YAML documents for notification routing;
+6. an `EnforcementPlan` for operator review;
+7. a `RuntimePolicyPack` for standalone KLIQ via `export-runtime-policy`;
+8. a signed `RuntimeBundle` for managed KLIQ via `build-runtime-bundle` or
    `serve`.
 
 The importer is a thin parser/converter, not a second policy model.
