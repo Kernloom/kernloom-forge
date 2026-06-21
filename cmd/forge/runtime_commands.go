@@ -11,11 +11,13 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	contracts "github.com/kernloom/kernloom-contracts"
 	"github.com/kernloom/kernloom-forge/internal/signing"
 	"github.com/kernloom/kernloom-forge/pkg/bundler"
 	"github.com/kernloom/kernloom-forge/pkg/compiler"
 	"github.com/kernloom/kernloom-forge/pkg/configpdp"
 	conformancefixtures "github.com/kernloom/kernloom-forge/pkg/conformance"
+	"github.com/kernloom/kernloom-forge/pkg/core/guardrail"
 	"github.com/kernloom/kernloom-forge/pkg/core/intent"
 	"github.com/kernloom/kernloom-forge/pkg/core/plan"
 	"github.com/kernloom/kernloom-forge/pkg/core/profile"
@@ -26,6 +28,7 @@ import (
 
 func exportRuntimePolicyCmd() *cobra.Command {
 	var policyFile, adaptersDir, profilesDir, target, output string
+	var guardrailFiles []string
 	var ttl time.Duration
 	cmd := &cobra.Command{
 		Use:   "export-runtime-policy",
@@ -39,10 +42,15 @@ func exportRuntimePolicyCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			guardrails, err := loadRuntimeGuardrails(guardrailFiles)
+			if err != nil {
+				return err
+			}
 			pack, err := bundler.BuildPolicyPack(ep, prof, bundler.RuntimePolicyConfig{
 				Name:       pol.Metadata.Name + "-" + prof.Metadata.Name,
 				IssuedAt:   time.Now().UTC(),
 				DefaultTTL: ttl,
+				Guardrails: guardrails,
 			})
 			if err != nil {
 				return err
@@ -54,12 +62,14 @@ func exportRuntimePolicyCmd() *cobra.Command {
 	cmd.Flags().StringVar(&target, "target", "", "TargetIntegrationProfile metadata.name (required)")
 	cmd.Flags().StringVarP(&output, "output", "o", "", "output file (default stdout)")
 	cmd.Flags().DurationVar(&ttl, "ttl", 0, "default runtime action TTL (default depends on target mode)")
+	cmd.Flags().StringArrayVar(&guardrailFiles, "guardrail", nil, "GuardrailPolicy YAML file to include in the RuntimePolicyPack (repeatable)")
 	_ = cmd.MarkFlagRequired("target")
 	return cmd
 }
 
 func buildRuntimeBundleCmd() *cobra.Command {
 	var policyFile, adaptersDir, profilesDir, target, output, signingKey, keyID, nodeID, mode, failover string
+	var guardrailFiles []string
 	var generation int
 	var validFor, ttl time.Duration
 	cmd := &cobra.Command{
@@ -71,6 +81,10 @@ func buildRuntimeBundleCmd() *cobra.Command {
 				return err
 			}
 			ep, prof, err := selectTarget(plans, profiles, target)
+			if err != nil {
+				return err
+			}
+			guardrails, err := loadRuntimeGuardrails(guardrailFiles)
 			if err != nil {
 				return err
 			}
@@ -87,6 +101,7 @@ func buildRuntimeBundleCmd() *cobra.Command {
 				RuntimePDPMode:    mode,
 				FailoverBehavior:  failover,
 				DefaultTTL:        ttl,
+				Guardrails:        guardrails,
 			}, priv)
 			if err != nil {
 				return err
@@ -107,6 +122,7 @@ func buildRuntimeBundleCmd() *cobra.Command {
 	cmd.Flags().StringVar(&failover, "failover", "fail_static", "offline failover behavior")
 	cmd.Flags().DurationVar(&validFor, "valid-for", 24*time.Hour, "bundle validity duration")
 	cmd.Flags().DurationVar(&ttl, "ttl", 0, "default runtime action TTL")
+	cmd.Flags().StringArrayVar(&guardrailFiles, "guardrail", nil, "GuardrailPolicy YAML file to include in the RuntimeBundle policy pack (repeatable)")
 	cmd.Flags().StringVarP(&output, "output", "o", "", "output file (default stdout)")
 	_ = cmd.MarkFlagRequired("target")
 	_ = cmd.MarkFlagRequired("node-id")
@@ -262,6 +278,22 @@ func compilePlans(policyFile, adaptersDir, profilesDir string) (*intent.AccessPo
 		return nil, nil, nil, fmt.Errorf("adapters: %w", err)
 	}
 	return pol, compiler.Compile(pol.Metadata.Name, reqs, profiles, bundles), profiles, nil
+}
+
+func loadRuntimeGuardrails(paths []string) ([]contracts.RuntimeGuardrail, error) {
+	var out []contracts.RuntimeGuardrail
+	for _, path := range paths {
+		p, err := guardrail.LoadPolicyFromFile(path)
+		if err != nil {
+			return nil, err
+		}
+		runtimeGuardrails, err := p.RuntimeGuardrails()
+		if err != nil {
+			return nil, fmt.Errorf("guardrail %s: %w", path, err)
+		}
+		out = append(out, runtimeGuardrails...)
+	}
+	return out, nil
 }
 
 func selectTarget(plans []*plan.EnforcementPlan, profiles []*profile.TargetIntegrationProfile, target string) (*plan.EnforcementPlan, *profile.TargetIntegrationProfile, error) {

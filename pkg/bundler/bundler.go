@@ -34,6 +34,7 @@ type RuntimePolicyConfig struct {
 	IssuedAt      time.Time
 	DefaultEffect string
 	DefaultTTL    time.Duration
+	Guardrails    []contracts.RuntimeGuardrail
 }
 
 type BundleConfig struct {
@@ -51,6 +52,7 @@ type BundleConfig struct {
 	RegistrySnapshot       contracts.RegistrySnapshot
 	BaselineEnabled        bool
 	GraphEnabled           bool
+	Guardrails             []contracts.RuntimeGuardrail
 }
 
 func BuildPolicyPack(ep *plan.EnforcementPlan, prof *profile.TargetIntegrationProfile, cfg RuntimePolicyConfig) (contracts.RuntimePolicyPack, error) {
@@ -95,6 +97,7 @@ func BuildPolicyPack(ep *plan.EnforcementPlan, prof *profile.TargetIntegrationPr
 		},
 		Spec: contracts.RuntimePolicyPackSpec{
 			DefaultEffect: defaultEffect,
+			Guardrails:    append([]contracts.RuntimeGuardrail(nil), cfg.Guardrails...),
 		},
 	}
 
@@ -173,6 +176,7 @@ func Build(ep *plan.EnforcementPlan, prof *profile.TargetIntegrationProfile, cfg
 		Generation: cfg.Generation,
 		IssuedAt:   issuedAt,
 		DefaultTTL: cfg.DefaultTTL,
+		Guardrails: cfg.Guardrails,
 	})
 	if err != nil {
 		return contracts.RuntimeBundle{}, err

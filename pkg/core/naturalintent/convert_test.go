@@ -49,6 +49,15 @@ never auto_block group "kernloom-admins"
 	if got := result.Warnings[1]; !strings.Contains(got, `exceeding 5 within 15m then alert (observe.signal.emit)`) {
 		t.Fatalf("when warning = %q", got)
 	}
+	if len(result.Guardrails) != 1 {
+		t.Fatalf("guardrails = %#v", result.Guardrails)
+	}
+	if got := result.Guardrails[0].ID; got != "never-auto-block-kernloom-admins" {
+		t.Fatalf("guardrail id = %q", got)
+	}
+	if got := result.Guardrails[0].Subject.Ref; got != "kernloom-admins" {
+		t.Fatalf("guardrail subject = %q", got)
+	}
 }
 
 func TestConvertTypedSelectors(t *testing.T) {

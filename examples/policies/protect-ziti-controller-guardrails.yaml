@@ -1,0 +1,19 @@
+apiVersion: kernloom.io/v1
+kind: GuardrailPolicy
+metadata:
+  name: protect-ziti-controller-guardrails
+spec:
+  invariants:
+    - id: never-auto-block-kernloom-admins
+      type: never
+      subject:
+        type: group
+        ref: kernloom-admins
+      forbiddenActions:
+        - enforce.traffic.drop
+        - enforce.access.deny
+        - enforce.network.quarantine
+        - enforce.identity.disable
+      enforcement:
+        violationBehavior: reject_action
+        unknownBehavior: reject_hard_action

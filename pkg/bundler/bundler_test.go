@@ -22,6 +22,15 @@ func TestBuildPolicyPackUsesKLIQContracts(t *testing.T) {
 	pack, err := bundler.BuildPolicyPack(testEnforcementPlan(), testProfile(), bundler.RuntimePolicyConfig{
 		IssuedAt:   fixedNow(),
 		DefaultTTL: time.Minute,
+		Guardrails: []contracts.RuntimeGuardrail{{
+			ID:   "never-auto-block-admins",
+			Type: "never",
+			Subject: contracts.RuntimeGuardrailSubject{
+				Type: "group",
+				Ref:  "kernloom-admins",
+			},
+			ForbiddenActions: []string{"enforce.access.deny"},
+		}},
 	})
 	if err != nil {
 		t.Fatalf("BuildPolicyPack: %v", err)
@@ -41,6 +50,12 @@ func TestBuildPolicyPackUsesKLIQContracts(t *testing.T) {
 	}
 	if rule.Then.TTL.Duration != time.Minute {
 		t.Fatalf("ttl = %s", rule.Then.TTL.Duration)
+	}
+	if len(pack.Spec.Guardrails) != 1 {
+		t.Fatalf("guardrails = %d, want 1", len(pack.Spec.Guardrails))
+	}
+	if pack.Spec.Guardrails[0].Subject.Ref != "kernloom-admins" {
+		t.Fatalf("guardrail not preserved: %#v", pack.Spec.Guardrails[0])
 	}
 }
 

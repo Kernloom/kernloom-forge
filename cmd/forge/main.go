@@ -65,6 +65,7 @@ func main() {
 func serveCmd() *cobra.Command {
 	var addr, adaptersDir, profilesDir, policyFile, target, signingKey, runtimeMode, failover, enrollTokenStore string
 	var enrollTokens []string
+	var guardrailFiles []string
 	var generation int
 	var validFor, ttl time.Duration
 
@@ -93,6 +94,10 @@ func serveCmd() *cobra.Command {
 				tokenValidator = store.Consume
 				srvLog.Printf("using enrollment token store %s", enrollTokenStore)
 			}
+			guardrails, err := loadRuntimeGuardrails(guardrailFiles)
+			if err != nil {
+				return err
+			}
 
 			var provider api.BundleProvider
 			if adaptersDir != "" && profilesDir != "" && policyFile != "" && target != "" {
@@ -118,6 +123,7 @@ func serveCmd() *cobra.Command {
 						RuntimePDPMode:    runtimeMode,
 						FailoverBehavior:  failover,
 						DefaultTTL:        ttl,
+						Guardrails:        guardrails,
 					}, priv)
 					if err != nil {
 						return nil, err
@@ -143,6 +149,7 @@ func serveCmd() *cobra.Command {
 	cmd.Flags().StringVar(&profilesDir, "profiles", "", "profiles directory")
 	cmd.Flags().StringVar(&target, "target", "", "TargetIntegrationProfile metadata.name for generated bundles")
 	cmd.Flags().StringVar(&signingKey, "signing-key", "", "PEM Ed25519 private key for generated bundles")
+	cmd.Flags().StringArrayVar(&guardrailFiles, "guardrail", nil, "GuardrailPolicy YAML file to include in served RuntimeBundles (repeatable)")
 	cmd.Flags().IntVar(&generation, "generation", 1, "bundle generation")
 	cmd.Flags().DurationVar(&validFor, "valid-for", 24*time.Hour, "bundle validity duration")
 	cmd.Flags().DurationVar(&ttl, "ttl", 0, "default runtime action TTL")

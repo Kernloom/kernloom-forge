@@ -134,6 +134,10 @@ go test ./...
 ./bin/forge conformance-fixtures --output /tmp/kernloom-conformance
 ```
 
+Add `--guardrail <GuardrailPolicy.yaml>` to `export-runtime-policy`,
+`build-runtime-bundle`, or `serve` when the runtime artifact should include
+safety invariants such as "never auto-block admins".
+
 ---
 
 ## Key concepts
@@ -200,27 +204,31 @@ Convert that text to YAML:
 ./bin/forge intent convert \
   --input examples/policies/protect-ziti-controller.intent \
   --output /tmp/protect-ziti-controller.yaml \
+  --guardrails-output /tmp/protect-ziti-controller-guardrails.yaml \
   --owner security
 ```
 
 Current limits:
 
 - `protect`, `allow` and `require` are emitted into `AccessPolicy`.
-- `default deny`, `when ... then ...` and `never ...` are recognized and
-  reported as warnings.
-- Response rules and guardrails still need a dedicated compiler IR.
+- `never ...` can be emitted into a separate `GuardrailPolicy` with
+  `--guardrails-output`.
+- `default deny` and `when ... then ...` are recognized and reported as
+  warnings for now.
+- Response rules still need a dedicated compiler IR.
 
 The generated YAML can then move through:
 
 1. an `AccessPolicy` YAML document for the access intent;
-2. an `EnforcementPlan` for operator review;
-3. a `RuntimePolicyPack` for standalone KLIQ via `export-runtime-policy`;
-4. a signed `RuntimeBundle` for managed KLIQ via `build-runtime-bundle` or
+2. an optional `GuardrailPolicy` YAML document for safety invariants;
+3. an `EnforcementPlan` for operator review;
+4. a `RuntimePolicyPack` for standalone KLIQ via `export-runtime-policy`;
+5. a signed `RuntimeBundle` for managed KLIQ via `build-runtime-bundle` or
    `serve`.
 
 The importer is a thin parser/converter, not a second policy model. Lines such
-as `when ... then ...` and `never ...` are accepted as intent text but currently
-reported as warnings until response-policy and guardrail schemas are added.
+as `when ... then ...` are accepted as intent text but currently reported as
+warnings until response-policy schemas are added.
 
 ### Five-object adapter model
 

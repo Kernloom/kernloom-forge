@@ -12,20 +12,23 @@ The KLIQ-side guide is in `kernloom/_docs/testing/manual-test-guide.md`.
 
 ## v0.3.0 Quick Path
 
-- Use `forge intent convert` only to create `AccessPolicy` YAML.
+- Use `forge intent convert` to create `AccessPolicy` YAML.
+- Add `--guardrails-output` when natural intent includes `never ...`.
 - Use `forge validate` to check the policy.
 - Use `forge compile` or `forge report` to inspect coverage and gaps.
 - Use `forge export-runtime-policy` for standalone KLIQ.
 - Use `forge build-runtime-bundle` or `forge serve` for managed KLIQ.
 - KLIQ never loads natural intent text directly.
-- `when ... then ...`, `default deny ...` and `never ...` are recognized by
-  the converter, but still produce warnings instead of runtime rules.
+- `when ... then ...` and `default deny ...` are recognized by the converter,
+  but still produce warnings instead of runtime rules.
+- `never ...` is emitted as a guardrail, not as an access condition.
 
 ## Mental Model
 
 | Artifact | Created By | Used By | Purpose |
 |---|---|---|---|
 | `AccessPolicy` | Operator / Git-PAP | Forge | Business policy intent |
+| `GuardrailPolicy` | Operator / `forge intent convert --guardrails-output` | Forge, KLIQ runtime resolver | Safety invariants such as "never auto-block admins" |
 | `EnforcementPlan` | `forge compile` | Operator / report | Shows coverage, downgrades, delegation, gaps |
 | `RuntimePolicyPack` | `forge export-runtime-policy` | Standalone KLIQ with `--policy-file` | Local RuntimePDP rules |
 | `RuntimeBundle` | `forge build-runtime-bundle` or `forge serve` | KLIQ managed mode | Signed bundle with registry snapshot and pack |
@@ -38,10 +41,10 @@ file for `kliq --policy-file`. For standalone KLIQ, always use
 
 Kernloom may offer a natural policy authoring layer, but it should compile to
 canonical `AccessPolicy` YAML before Forge plans anything. Today,
-`forge intent convert` emits only the access policy part. Response and guardrail
-lines such as `when ... then ...`, `default deny ...`, and `never ...` are
-recognized and reported as warnings, but are not written into the `AccessPolicy`
-YAML yet.
+`forge intent convert` emits the access policy part and can also emit guardrail
+invariants. Response lines such as `when ... then ...` and target defaults such
+as `default deny ...` are recognized and reported as warnings until their own IR
+exists.
 
 Natural authoring form:
 
@@ -102,7 +105,35 @@ The natural lines map like this:
 | `require "session.authentication.strength" in [...]` | `conditions[]` entry with `type: authentication_strength` and list value |
 | `default deny access to "ziti-controller"` | Recognized today, warning only. Later: target default deny or `RuntimePolicyPack.spec.default_effect: deny` |
 | `when denied access to "ziti-controller" exceeds 5 within 15m then alert` | Recognized today, warning only. Later: response rule trigger with `alert` as alias for `observe.signal.emit` |
-| `never auto_block group "kernloom-admins"` | Recognized today, warning only. Later: safety guardrail that caps runtime action selection for that group |
+| `never auto_block group "kernloom-admins"` | Optional `GuardrailPolicy` output. It blocks hard runtime actions that could auto-block that group |
+
+GuardrailPolicy YAML shape after conversion with `--guardrails-output`:
+
+```yaml
+apiVersion: kernloom.io/v1
+kind: GuardrailPolicy
+metadata:
+  name: protect-ziti-controller-guardrails
+spec:
+  invariants:
+    - id: never-auto-block-kernloom-admins
+      type: never
+      subject:
+        type: group
+        ref: kernloom-admins
+      forbiddenActions:
+        - enforce.traffic.drop
+        - enforce.access.deny
+        - enforce.network.quarantine
+        - enforce.identity.disable
+      enforcement:
+        violationBehavior: reject_action
+        unknownBehavior: reject_hard_action
+```
+
+KLIQ evaluates guardrails before an action reaches the PEP. A direct match is
+rejected. If a hard action has unknown blast radius, KLIQ also rejects it until
+the target subject is known.
 
 Multiple `when ... then ...` statements are fine. The current
 `RuntimePolicyPack` contract has one `when` and one `then` per rule. If a
@@ -136,13 +167,13 @@ Convert the natural form into canonical YAML:
 ./bin/forge intent convert \
   --input examples/policies/protect-ziti-controller.intent \
   --output /tmp/kernloom-forge-manual/policies/protect-ziti-controller.yaml \
+  --guardrails-output /tmp/kernloom-forge-manual/policies/protect-ziti-controller-guardrails.yaml \
   --owner security
 ```
 
 The converter writes warnings for lines that are understood but not emitted into
-`AccessPolicy` yet, such as `when ... then ...`, `never ...`, and `default deny`.
-Those lines are later represented in target defaults, RuntimePolicyPack
-response rules, or guardrail policy once the matching schema exists.
+`AccessPolicy` yet, such as `when ... then ...` and `default deny`. `never ...`
+is written to the guardrail output when `--guardrails-output` is set.
 
 `alert` is not the only possible response action. Natural intent may use short
 aliases for standard action/capability IDs:
@@ -168,13 +199,16 @@ the target profile's allowed action level.
 
 Current status: Forge accepts the converted canonical YAML form for
 `validate`, `compile`, `report`, `export-runtime-policy`, and
-`build-runtime-bundle`.
+`build-runtime-bundle`. Forge accepts `GuardrailPolicy` files through
+`--guardrail` on `export-runtime-policy`, `build-runtime-bundle`, and `serve`.
 
 Example files:
 
 - `examples/policies/protect-ziti-controller.intent`: natural authoring example.
 - `examples/policies/protect-ziti-controller.yaml`: converted YAML that Forge can
   validate and compile today.
+- `examples/policies/protect-ziti-controller-guardrails.yaml`: optional
+  guardrail output for the natural `never ...` line.
 
 ## Setup
 
@@ -281,6 +315,12 @@ grep -E 'target:|deployable:|status:|support:|fidelity:|downgrade|compensating|r
 
 ## 3. Build A RuntimePolicyPack For Standalone KLIQ
 
+The `--guardrail` flag is optional. Use it only when you created a
+`GuardrailPolicy` file, for example through `intent convert --guardrails-output`.
+For source-only adapters, a group guardrail can reject hard actions when the
+subject is unknown. That is safer, but it can also prevent source blocks until
+identity context is available.
+
 ```bash
 ./bin/forge export-runtime-policy \
   --policy /tmp/kernloom-forge-manual/policies/manual-edge-access.yaml \
@@ -291,10 +331,23 @@ grep -E 'target:|deployable:|status:|support:|fidelity:|downgrade|compensating|r
   --output /tmp/kernloom-forge-manual/out/manual-edge-runtime-pack.yaml
 ```
 
+Optional guardrail variant:
+
+```bash
+./bin/forge export-runtime-policy \
+  --policy /tmp/kernloom-forge-manual/policies/manual-edge-access.yaml \
+  --adapters examples/adapters \
+  --profiles examples/profiles \
+  --target klshield-local \
+  --guardrail /tmp/kernloom-forge-manual/policies/protect-ziti-controller-guardrails.yaml \
+  --ttl 30s \
+  --output /tmp/kernloom-forge-manual/out/manual-edge-runtime-pack-guarded.yaml
+```
+
 Check the pack:
 
 ```bash
-grep -E 'kind: RuntimePolicyPack|capabilities_required:|when:|capability:|level:' \
+grep -E 'kind: RuntimePolicyPack|capabilities_required:|guardrails:|when:|capability:|level:' \
   /tmp/kernloom-forge-manual/out/manual-edge-runtime-pack.yaml
 ```
 
@@ -302,6 +355,7 @@ Expected:
 
 - `kind: RuntimePolicyPack`
 - `capability: enforce.access.deny`
+- `guardrails:` when a `--guardrail` file was provided
 - a rule for `risk.level in ['high', 'critical']`
 - a rule for `device.posture.status in ['degraded', 'unhealthy']`
 
@@ -373,6 +427,9 @@ cd /home/adrian/prj/ebpf-security/kernloom-forge
 ```
 
 Build one bundle as a file:
+
+The same optional `--guardrail` flag is used for signed bundles and served
+bundles. Add the flag when the bundle should carry guardrails.
 
 ```bash
 ./bin/forge build-runtime-bundle \

@@ -12,6 +12,8 @@ import (
 	"time"
 	"unicode"
 
+	contracts "github.com/kernloom/kernloom-contracts"
+	"github.com/kernloom/kernloom-forge/pkg/core/guardrail"
 	"github.com/kernloom/kernloom-forge/pkg/core/intent"
 )
 
@@ -23,8 +25,9 @@ type Options struct {
 }
 
 type Result struct {
-	Policy   *intent.AccessPolicy
-	Warnings []string
+	Policy     *intent.AccessPolicy
+	Guardrails []contracts.RuntimeGuardrail
+	Warnings   []string
 }
 
 func Convert(data []byte, opts Options) (*Result, error) {
@@ -43,6 +46,7 @@ func Convert(data []byte, opts Options) (*Result, error) {
 		environment  string
 		conditions   []intent.Condition
 		conditionIDs map[string]int
+		guardrails   []contracts.RuntimeGuardrail
 		warnings     []string
 	)
 	conditionIDs = map[string]int{}
@@ -110,7 +114,12 @@ func Convert(data []byte, opts Options) (*Result, error) {
 			}
 			warnings = append(warnings, fmt.Sprintf("line %d: when/then response rules are not emitted into AccessPolicy yet", lineNo+1))
 		case "never":
-			warnings = append(warnings, fmt.Sprintf("line %d: never guardrails are not emitted into AccessPolicy yet", lineNo+1))
+			g, err := guardrail.FromNeverTokens(tokens[1:])
+			if err != nil {
+				return nil, fmt.Errorf("line %d: %w", lineNo+1, err)
+			}
+			guardrails = append(guardrails, g)
+			warnings = append(warnings, fmt.Sprintf("line %d: never guardrail %q is emitted as runtime guardrail, not into AccessPolicy", lineNo+1, g.ID))
 		case "max":
 			if len(tokens) >= 2 && tokens[1] == "action" {
 				warnings = append(warnings, fmt.Sprintf("line %d: max action guardrails are not emitted into AccessPolicy yet", lineNo+1))
@@ -161,7 +170,7 @@ func Convert(data []byte, opts Options) (*Result, error) {
 	if err := pol.Validate(); err != nil {
 		return nil, err
 	}
-	return &Result{Policy: pol, Warnings: warnings}, nil
+	return &Result{Policy: pol, Guardrails: guardrails, Warnings: warnings}, nil
 }
 
 type responseRule struct {

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/kernloom/kernloom-forge/pkg/core/guardrail"
 	"github.com/kernloom/kernloom-forge/pkg/core/naturalintent"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
@@ -22,7 +23,7 @@ func intentCmd() *cobra.Command {
 }
 
 func intentConvertCmd() *cobra.Command {
-	var input, output, name, owner, subjectType, resourceType string
+	var input, output, guardrailsOutput, name, owner, subjectType, resourceType string
 
 	cmd := &cobra.Command{
 		Use:   "convert",
@@ -48,6 +49,20 @@ func intentConvertCmd() *cobra.Command {
 			for _, warning := range result.Warnings {
 				fmt.Fprintf(os.Stderr, "warning: %s\n", warning)
 			}
+			if guardrailsOutput != "" && len(result.Guardrails) > 0 {
+				guardrailName := name
+				if guardrailName == "" {
+					guardrailName = result.Policy.Metadata.Name + "-guardrails"
+				}
+				guardrailPolicy := guardrail.PolicyFromRuntime(guardrailName, result.Guardrails)
+				guardrailYAML, err := yaml.Marshal(guardrailPolicy)
+				if err != nil {
+					return err
+				}
+				if err := os.WriteFile(guardrailsOutput, guardrailYAML, 0o644); err != nil {
+					return err
+				}
+			}
 			out, err := yaml.Marshal(result.Policy)
 			if err != nil {
 				return err
@@ -62,6 +77,7 @@ func intentConvertCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&input, "input", "", "natural policy intent file (required)")
 	cmd.Flags().StringVar(&output, "output", "-", "AccessPolicy YAML output path, or '-' for stdout")
+	cmd.Flags().StringVar(&guardrailsOutput, "guardrails-output", "", "optional GuardrailPolicy YAML output path for never/max action statements")
 	cmd.Flags().StringVar(&name, "name", "", "override metadata.name")
 	cmd.Flags().StringVar(&owner, "owner", "", "metadata.owner")
 	cmd.Flags().StringVar(&subjectType, "default-subject-type", "group", "selector type for untyped subjects")
