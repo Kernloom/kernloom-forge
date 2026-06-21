@@ -138,6 +138,9 @@ Add `--guardrail <GuardrailPolicy.yaml>` to `export-runtime-policy`,
 `build-runtime-bundle`, or `serve` when the runtime artifact should include
 safety invariants such as "never auto-block admins".
 
+Add `--response <ResponsePolicy.yaml>` and `--alert-route <AlertRoute.yaml>`
+when the runtime artifact should carry response rules and routed alerts.
+
 ---
 
 ## Key concepts
@@ -186,17 +189,17 @@ allow group "kernloom-admins" to access "ziti-controller"
 require "subject.risk.level" eq "low"
 require "session.authentication.strength" in ["mfa", "phishing_resistant_mfa"]
 default deny access to "ziti-controller"
-when denied access to "ziti-controller" exceeds 5 within 15m then alert
+when denied access to "ziti-controller" exceeds 5 within 15m then alert route "security-ops" severity "medium" dedupe 15m
 never auto_block group "kernloom-admins"
 ```
 
 Quotes are optional around simple variable values and useful to show which
 tokens are data rather than language.
 
-`alert` is a natural alias for the canonical observe action
-`observe.signal.emit`. Other standard response actions include
-`rate_limit`, `deny`, `network_deny`, `drop`, `tarpit`, and `quarantine`, or
-their canonical IDs from the registry.
+`alert` is a routed notification action. It must name an `AlertRoute`, a
+severity, and a dedupe window. Technical response actions include `rate_limit`,
+`deny`, `network_deny`, `drop`, `tarpit`, and `quarantine`, or their canonical
+IDs from the registry.
 
 Convert that text to YAML:
 
@@ -205,6 +208,7 @@ Convert that text to YAML:
   --input examples/policies/protect-ziti-controller.intent \
   --output /tmp/protect-ziti-controller.yaml \
   --guardrails-output /tmp/protect-ziti-controller-guardrails.yaml \
+  --response-output /tmp/protect-ziti-controller-responses.yaml \
   --owner security
 ```
 
@@ -213,22 +217,23 @@ Current limits:
 - `protect`, `allow` and `require` are emitted into `AccessPolicy`.
 - `never ...` can be emitted into a separate `GuardrailPolicy` with
   `--guardrails-output`.
-- `default deny` and `when ... then ...` are recognized and reported as
-  warnings for now.
-- Response rules still need a dedicated compiler IR.
+- `when ... then alert route ...` can be emitted into a separate
+  `ResponsePolicy` with `--response-output`.
+- `default deny` is recognized and reported as a warning for now.
+- Alert delivery is defined separately with `AlertRoute`.
 
 The generated YAML can then move through:
 
 1. an `AccessPolicy` YAML document for the access intent;
 2. an optional `GuardrailPolicy` YAML document for safety invariants;
-3. an `EnforcementPlan` for operator review;
-4. a `RuntimePolicyPack` for standalone KLIQ via `export-runtime-policy`;
-5. a signed `RuntimeBundle` for managed KLIQ via `build-runtime-bundle` or
+3. an optional `ResponsePolicy` YAML document for response actions;
+4. optional `AlertRoute` YAML documents for notification routing;
+5. an `EnforcementPlan` for operator review;
+6. a `RuntimePolicyPack` for standalone KLIQ via `export-runtime-policy`;
+7. a signed `RuntimeBundle` for managed KLIQ via `build-runtime-bundle` or
    `serve`.
 
-The importer is a thin parser/converter, not a second policy model. Lines such
-as `when ... then ...` are accepted as intent text but currently reported as
-warnings until response-policy schemas are added.
+The importer is a thin parser/converter, not a second policy model.
 
 ### Five-object adapter model
 

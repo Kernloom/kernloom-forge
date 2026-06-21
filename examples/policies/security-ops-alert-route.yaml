@@ -1,0 +1,25 @@
+apiVersion: kernloom.io/v1
+kind: AlertRoute
+metadata:
+  name: alert-route.security-ops
+spec:
+  audience:
+    type: group
+    ref: group.kernloom-security-ops
+  channels:
+    - type: slack
+      ref: channel.security-ops
+    - type: email
+      ref: mailinglist.security-ops
+  defaultSeverity: medium
+  deduplication:
+    enabled: true
+    window: 15m
+    keys:
+      - resource.id
+      - detection.id
+      - source.identity_or_ip
+  caseManagement:
+    createCase: false
+  acknowledgement:
+    required: false

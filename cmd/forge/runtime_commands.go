@@ -22,6 +22,7 @@ import (
 	"github.com/kernloom/kernloom-forge/pkg/core/plan"
 	"github.com/kernloom/kernloom-forge/pkg/core/profile"
 	"github.com/kernloom/kernloom-forge/pkg/core/requirement"
+	"github.com/kernloom/kernloom-forge/pkg/core/response"
 	"github.com/kernloom/kernloom-forge/pkg/report"
 	"github.com/spf13/cobra"
 )
@@ -29,6 +30,8 @@ import (
 func exportRuntimePolicyCmd() *cobra.Command {
 	var policyFile, adaptersDir, profilesDir, target, output string
 	var guardrailFiles []string
+	var responseFiles []string
+	var alertRouteFiles []string
 	var ttl time.Duration
 	cmd := &cobra.Command{
 		Use:   "export-runtime-policy",
@@ -46,11 +49,21 @@ func exportRuntimePolicyCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			responseRules, err := loadRuntimeResponseRules(responseFiles)
+			if err != nil {
+				return err
+			}
+			alertRoutes, err := loadRuntimeAlertRoutes(alertRouteFiles)
+			if err != nil {
+				return err
+			}
 			pack, err := bundler.BuildPolicyPack(ep, prof, bundler.RuntimePolicyConfig{
-				Name:       pol.Metadata.Name + "-" + prof.Metadata.Name,
-				IssuedAt:   time.Now().UTC(),
-				DefaultTTL: ttl,
-				Guardrails: guardrails,
+				Name:          pol.Metadata.Name + "-" + prof.Metadata.Name,
+				IssuedAt:      time.Now().UTC(),
+				DefaultTTL:    ttl,
+				Guardrails:    guardrails,
+				ResponseRules: responseRules,
+				AlertRoutes:   alertRoutes,
 			})
 			if err != nil {
 				return err
@@ -63,6 +76,8 @@ func exportRuntimePolicyCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&output, "output", "o", "", "output file (default stdout)")
 	cmd.Flags().DurationVar(&ttl, "ttl", 0, "default runtime action TTL (default depends on target mode)")
 	cmd.Flags().StringArrayVar(&guardrailFiles, "guardrail", nil, "GuardrailPolicy YAML file to include in the RuntimePolicyPack (repeatable)")
+	cmd.Flags().StringArrayVar(&responseFiles, "response", nil, "ResponsePolicy YAML file to include in the RuntimePolicyPack (repeatable)")
+	cmd.Flags().StringArrayVar(&alertRouteFiles, "alert-route", nil, "AlertRoute YAML file to include in the RuntimePolicyPack (repeatable)")
 	_ = cmd.MarkFlagRequired("target")
 	return cmd
 }
@@ -70,6 +85,8 @@ func exportRuntimePolicyCmd() *cobra.Command {
 func buildRuntimeBundleCmd() *cobra.Command {
 	var policyFile, adaptersDir, profilesDir, target, output, signingKey, keyID, nodeID, mode, failover string
 	var guardrailFiles []string
+	var responseFiles []string
+	var alertRouteFiles []string
 	var generation int
 	var validFor, ttl time.Duration
 	cmd := &cobra.Command{
@@ -88,6 +105,14 @@ func buildRuntimeBundleCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			responseRules, err := loadRuntimeResponseRules(responseFiles)
+			if err != nil {
+				return err
+			}
+			alertRoutes, err := loadRuntimeAlertRoutes(alertRouteFiles)
+			if err != nil {
+				return err
+			}
 			priv, err := signing.LoadPrivateKey(signingKey)
 			if err != nil {
 				return err
@@ -102,6 +127,8 @@ func buildRuntimeBundleCmd() *cobra.Command {
 				FailoverBehavior:  failover,
 				DefaultTTL:        ttl,
 				Guardrails:        guardrails,
+				ResponseRules:     responseRules,
+				AlertRoutes:       alertRoutes,
 			}, priv)
 			if err != nil {
 				return err
@@ -123,6 +150,8 @@ func buildRuntimeBundleCmd() *cobra.Command {
 	cmd.Flags().DurationVar(&validFor, "valid-for", 24*time.Hour, "bundle validity duration")
 	cmd.Flags().DurationVar(&ttl, "ttl", 0, "default runtime action TTL")
 	cmd.Flags().StringArrayVar(&guardrailFiles, "guardrail", nil, "GuardrailPolicy YAML file to include in the RuntimeBundle policy pack (repeatable)")
+	cmd.Flags().StringArrayVar(&responseFiles, "response", nil, "ResponsePolicy YAML file to include in the RuntimeBundle policy pack (repeatable)")
+	cmd.Flags().StringArrayVar(&alertRouteFiles, "alert-route", nil, "AlertRoute YAML file to include in the RuntimeBundle policy pack (repeatable)")
 	cmd.Flags().StringVarP(&output, "output", "o", "", "output file (default stdout)")
 	_ = cmd.MarkFlagRequired("target")
 	_ = cmd.MarkFlagRequired("node-id")
@@ -292,6 +321,38 @@ func loadRuntimeGuardrails(paths []string) ([]contracts.RuntimeGuardrail, error)
 			return nil, fmt.Errorf("guardrail %s: %w", path, err)
 		}
 		out = append(out, runtimeGuardrails...)
+	}
+	return out, nil
+}
+
+func loadRuntimeResponseRules(paths []string) ([]contracts.RuntimeResponseRule, error) {
+	var out []contracts.RuntimeResponseRule
+	for _, path := range paths {
+		p, err := response.LoadPolicyFromFile(path)
+		if err != nil {
+			return nil, err
+		}
+		rules, err := p.RuntimeResponseRules()
+		if err != nil {
+			return nil, fmt.Errorf("response %s: %w", path, err)
+		}
+		out = append(out, rules...)
+	}
+	return out, nil
+}
+
+func loadRuntimeAlertRoutes(paths []string) ([]contracts.RuntimeAlertRoute, error) {
+	var out []contracts.RuntimeAlertRoute
+	for _, path := range paths {
+		route, err := response.LoadAlertRouteFromFile(path)
+		if err != nil {
+			return nil, err
+		}
+		runtimeRoute, err := route.RuntimeAlertRoute()
+		if err != nil {
+			return nil, fmt.Errorf("alert route %s: %w", path, err)
+		}
+		out = append(out, runtimeRoute)
 	}
 	return out, nil
 }

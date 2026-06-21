@@ -25,9 +25,10 @@ type Options struct {
 }
 
 type Result struct {
-	Policy     *intent.AccessPolicy
-	Guardrails []contracts.RuntimeGuardrail
-	Warnings   []string
+	Policy        *intent.AccessPolicy
+	Guardrails    []contracts.RuntimeGuardrail
+	ResponseRules []contracts.RuntimeResponseRule
+	Warnings      []string
 }
 
 func Convert(data []byte, opts Options) (*Result, error) {
@@ -47,6 +48,7 @@ func Convert(data []byte, opts Options) (*Result, error) {
 		conditions   []intent.Condition
 		conditionIDs map[string]int
 		guardrails   []contracts.RuntimeGuardrail
+		responses    []contracts.RuntimeResponseRule
 		warnings     []string
 	)
 	conditionIDs = map[string]int{}
@@ -104,11 +106,13 @@ func Convert(data []byte, opts Options) (*Result, error) {
 				return nil, fmt.Errorf("line %d: %w", lineNo+1, err)
 			}
 			if rule.ResourceRef != "" {
-				warning := fmt.Sprintf("line %d: response rule for denied access to %q exceeding %d within %s then %s (%s)", lineNo+1, rule.ResourceRef, rule.Threshold, rule.Window, rule.Action, rule.CanonicalAction)
-				if rule.TTL != "" {
-					warning += fmt.Sprintf(" for %s", rule.TTL)
+				runtimeRule := rule.RuntimeRule()
+				responses = append(responses, runtimeRule)
+				action := runtimeRule.Then[0]
+				warning := fmt.Sprintf("line %d: response rule %q is emitted as ResponsePolicy IR, not into AccessPolicy", lineNo+1, runtimeRule.ID)
+				if action.ID == "notify.alert.emit" {
+					warning += fmt.Sprintf(" (alert route %q severity %q dedupe %s)", action.Route, action.Severity, action.Dedupe)
 				}
-				warning += " is not emitted into AccessPolicy yet"
 				warnings = append(warnings, warning)
 				continue
 			}
@@ -170,16 +174,34 @@ func Convert(data []byte, opts Options) (*Result, error) {
 	if err := pol.Validate(); err != nil {
 		return nil, err
 	}
-	return &Result{Policy: pol, Guardrails: guardrails, Warnings: warnings}, nil
+	return &Result{Policy: pol, Guardrails: guardrails, ResponseRules: responses, Warnings: warnings}, nil
 }
 
 type responseRule struct {
-	ResourceRef     string
-	Threshold       int
-	Window          string
-	Action          string
-	CanonicalAction string
-	TTL             string
+	ResourceRef string
+	Threshold   int
+	Window      time.Duration
+	Action      contracts.RuntimeResponseAction
+}
+
+func (r responseRule) RuntimeRule() contracts.RuntimeResponseRule {
+	actionSlug := slug(r.Action.ID)
+	if r.Action.Route != "" {
+		actionSlug = slug(r.Action.Route)
+	}
+	return contracts.RuntimeResponseRule{
+		ID: "denied-access-" + slug(r.ResourceRef) + "-" + actionSlug,
+		When: contracts.RuntimeResponseTrigger{
+			Type:        "access.denied_threshold",
+			ResourceRef: r.ResourceRef,
+			Threshold:   r.Threshold,
+			Window:      contracts.NewDuration(r.Window),
+		},
+		Then: []contracts.RuntimeResponseAction{r.Action},
+		ReasonCodes: []string{
+			"denied_access_threshold_exceeded",
+		},
+	}
 }
 
 func parseWhen(tokens []string) (responseRule, error) {
@@ -209,7 +231,8 @@ func parseWhen(tokens []string) (responseRule, error) {
 		return responseRule{}, fmt.Errorf("when denied access must use 'within <duration>' after exceeds")
 	}
 	window := tokens[exceedsIndex+3]
-	if err := validateDurationToken(window); err != nil {
+	windowDuration, err := parseDurationToken(window)
+	if err != nil {
 		return responseRule{}, fmt.Errorf("when denied access window: %w", err)
 	}
 	thenIndex := exceedsIndex + 4
@@ -221,22 +244,16 @@ func parseWhen(tokens []string) (responseRule, error) {
 	if len(actionTokens) == 0 {
 		return responseRule{}, fmt.Errorf("when denied access then requires an action")
 	}
-	actionTokens, ttl, err := splitOptionalActionTTL(actionTokens)
+	action, err := parseResponseAction(actionTokens)
 	if err != nil {
 		return responseRule{}, err
 	}
-	action, canonicalAction := normalizeResponseAction(actionTokens)
-	if canonicalAction == "" {
-		return responseRule{}, fmt.Errorf("unsupported response action %q", strings.Join(actionTokens, " "))
-	}
 
 	return responseRule{
-		ResourceRef:     strings.Join(tokens[3:exceedsIndex], " "),
-		Threshold:       threshold,
-		Window:          window,
-		Action:          action,
-		CanonicalAction: canonicalAction,
-		TTL:             ttl,
+		ResourceRef: strings.Join(tokens[3:exceedsIndex], " "),
+		Threshold:   threshold,
+		Window:      windowDuration,
+		Action:      action,
 	}, nil
 }
 
@@ -351,14 +368,126 @@ func splitOptionalActionTTL(tokens []string) ([]string, string, error) {
 	return tokens, "", nil
 }
 
+func parseResponseAction(tokens []string) (contracts.RuntimeResponseAction, error) {
+	if len(tokens) == 0 {
+		return contracts.RuntimeResponseAction{}, fmt.Errorf("then action is missing")
+	}
+	if tokens[0] == "alert" {
+		return parseAlertAction(tokens)
+	}
+	actionTokens, ttl, err := splitOptionalActionTTL(tokens)
+	if err != nil {
+		return contracts.RuntimeResponseAction{}, err
+	}
+	target := contracts.RuntimeResponseTarget{}
+	if len(actionTokens) > 1 && isResponseTargetScope(actionTokens[len(actionTokens)-1]) {
+		target.Scope = actionTokens[len(actionTokens)-1]
+		actionTokens = actionTokens[:len(actionTokens)-1]
+	}
+	action, canonicalAction := normalizeResponseAction(actionTokens)
+	if canonicalAction == "" {
+		return contracts.RuntimeResponseAction{}, fmt.Errorf("unsupported response action %q", strings.Join(tokens, " "))
+	}
+	runtimeAction := contracts.RuntimeResponseAction{
+		ID:     canonicalAction,
+		Target: target,
+		Params: map[string]any{
+			"natural_action": action,
+		},
+	}
+	if ttl != "" {
+		parsed, err := parseDurationToken(ttl)
+		if err != nil {
+			return contracts.RuntimeResponseAction{}, fmt.Errorf("then action TTL: %w", err)
+		}
+		runtimeAction.TTL = contracts.NewDuration(parsed)
+	}
+	return runtimeAction, nil
+}
+
+func parseAlertAction(tokens []string) (contracts.RuntimeResponseAction, error) {
+	if len(tokens) < 7 || tokens[1] != "route" {
+		return contracts.RuntimeResponseAction{}, fmt.Errorf("alert action must use 'alert route <route> severity <level> dedupe <duration>'")
+	}
+	route := normalizeAlertRoute(tokens[2])
+	severityIndex := indexToken(tokens, "severity")
+	dedupeIndex := indexToken(tokens, "dedupe")
+	if severityIndex < 0 || severityIndex == len(tokens)-1 {
+		return contracts.RuntimeResponseAction{}, fmt.Errorf("alert action requires severity <level>")
+	}
+	if dedupeIndex < 0 || dedupeIndex == len(tokens)-1 {
+		return contracts.RuntimeResponseAction{}, fmt.Errorf("alert action requires dedupe <duration>")
+	}
+	severity := tokens[severityIndex+1]
+	if !isSeverity(severity) {
+		return contracts.RuntimeResponseAction{}, fmt.Errorf("unsupported alert severity %q", severity)
+	}
+	dedupe, err := parseDurationToken(tokens[dedupeIndex+1])
+	if err != nil {
+		return contracts.RuntimeResponseAction{}, fmt.Errorf("alert dedupe: %w", err)
+	}
+	params := map[string]any{}
+	if hasTokenSequence(tokens, "create", "case") {
+		params["create_case"] = true
+	}
+	return contracts.RuntimeResponseAction{
+		ID:       "notify.alert.emit",
+		Route:    route,
+		Severity: severity,
+		Dedupe:   contracts.NewDuration(dedupe),
+		Params:   params,
+	}, nil
+}
+
+func normalizeAlertRoute(route string) string {
+	route = strings.TrimSpace(route)
+	if route == "" || strings.HasPrefix(route, "alert-route.") {
+		return route
+	}
+	return "alert-route." + route
+}
+
+func isSeverity(value string) bool {
+	switch value {
+	case "low", "medium", "high", "critical":
+		return true
+	default:
+		return false
+	}
+}
+
+func isResponseTargetScope(value string) bool {
+	switch value {
+	case "source", "subject", "resource":
+		return true
+	default:
+		return false
+	}
+}
+
+func hasTokenSequence(tokens []string, first, second string) bool {
+	for i := 0; i+1 < len(tokens); i++ {
+		if tokens[i] == first && tokens[i+1] == second {
+			return true
+		}
+	}
+	return false
+}
+
 func validateDurationToken(value string) error {
+	_, err := parseDurationToken(value)
+	return err
+}
+
+func parseDurationToken(value string) (time.Duration, error) {
 	if value == "" {
-		return fmt.Errorf("duration is empty")
+		return 0, fmt.Errorf("duration is empty")
 	}
-	if _, err := time.ParseDuration(value); err != nil {
-		return fmt.Errorf("%q is not a valid duration", value)
+	parsed, err := time.ParseDuration(value)
+	if err != nil {
+		return 0, fmt.Errorf("%q is not a valid duration", value)
 	}
-	return nil
+	return parsed, nil
 }
 
 func normalizeResponseAction(tokens []string) (string, string) {

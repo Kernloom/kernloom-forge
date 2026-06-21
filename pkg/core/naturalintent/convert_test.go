@@ -15,7 +15,7 @@ allow group "kernloom-admins" to access "ziti-controller"
 require "subject.risk.level" eq "low"
 require "device.posture.status" eq "healthy"
 default deny access to "ziti-controller"
-when denied access to "ziti-controller" exceeds 5 within 15m then alert
+when denied access to "ziti-controller" exceeds 5 within 15m then alert route "security-ops" severity "medium" dedupe 15m
 never auto_block group "kernloom-admins"
 `), Options{Owner: "security"})
 	if err != nil {
@@ -46,8 +46,17 @@ never auto_block group "kernloom-admins"
 	if len(result.Warnings) != 3 {
 		t.Fatalf("warnings = %#v", result.Warnings)
 	}
-	if got := result.Warnings[1]; !strings.Contains(got, `exceeding 5 within 15m then alert (observe.signal.emit)`) {
+	if got := result.Warnings[1]; !strings.Contains(got, `ResponsePolicy IR`) || !strings.Contains(got, `alert-route.security-ops`) {
 		t.Fatalf("when warning = %q", got)
+	}
+	if len(result.ResponseRules) != 1 {
+		t.Fatalf("response rules = %#v", result.ResponseRules)
+	}
+	if got := result.ResponseRules[0].Then[0].ID; got != "notify.alert.emit" {
+		t.Fatalf("response action = %q", got)
+	}
+	if got := result.ResponseRules[0].Then[0].Route; got != "alert-route.security-ops" {
+		t.Fatalf("response route = %q", got)
 	}
 	if len(result.Guardrails) != 1 {
 		t.Fatalf("guardrails = %#v", result.Guardrails)
@@ -119,7 +128,29 @@ when denied access to "admin-api" exceeds 10 within 5m then quarantine for 15m
 	if len(result.Warnings) != 1 {
 		t.Fatalf("warnings = %#v", result.Warnings)
 	}
-	if got := result.Warnings[0]; !strings.Contains(got, `then quarantine (enforce.network.quarantine)`) {
+	if got := result.Warnings[0]; !strings.Contains(got, `ResponsePolicy IR`) {
 		t.Fatalf("warning = %q", got)
+	}
+	if len(result.ResponseRules) != 1 {
+		t.Fatalf("response rules = %#v", result.ResponseRules)
+	}
+	if got := result.ResponseRules[0].Then[0].ID; got != "enforce.network.quarantine" {
+		t.Fatalf("response action = %q", got)
+	}
+	if got := result.ResponseRules[0].Then[0].TTL.Duration.String(); got != "15m0s" {
+		t.Fatalf("response ttl = %q", got)
+	}
+}
+
+func TestConvertRejectsUnroutedAlert(t *testing.T) {
+	_, err := Convert([]byte(`
+protect service "admin-api"
+when denied access to "admin-api" exceeds 10 within 5m then alert for 15m
+`), Options{})
+	if err == nil {
+		t.Fatal("expected unrouted alert to fail")
+	}
+	if !strings.Contains(err.Error(), "alert action must use") {
+		t.Fatalf("error = %v", err)
 	}
 }

@@ -35,6 +35,8 @@ type RuntimePolicyConfig struct {
 	DefaultEffect string
 	DefaultTTL    time.Duration
 	Guardrails    []contracts.RuntimeGuardrail
+	ResponseRules []contracts.RuntimeResponseRule
+	AlertRoutes   []contracts.RuntimeAlertRoute
 }
 
 type BundleConfig struct {
@@ -53,6 +55,8 @@ type BundleConfig struct {
 	BaselineEnabled        bool
 	GraphEnabled           bool
 	Guardrails             []contracts.RuntimeGuardrail
+	ResponseRules          []contracts.RuntimeResponseRule
+	AlertRoutes            []contracts.RuntimeAlertRoute
 }
 
 func BuildPolicyPack(ep *plan.EnforcementPlan, prof *profile.TargetIntegrationProfile, cfg RuntimePolicyConfig) (contracts.RuntimePolicyPack, error) {
@@ -98,6 +102,8 @@ func BuildPolicyPack(ep *plan.EnforcementPlan, prof *profile.TargetIntegrationPr
 		Spec: contracts.RuntimePolicyPackSpec{
 			DefaultEffect: defaultEffect,
 			Guardrails:    append([]contracts.RuntimeGuardrail(nil), cfg.Guardrails...),
+			ResponseRules: append([]contracts.RuntimeResponseRule(nil), cfg.ResponseRules...),
+			AlertRoutes:   append([]contracts.RuntimeAlertRoute(nil), cfg.AlertRoutes...),
 		},
 	}
 
@@ -172,11 +178,13 @@ func Build(ep *plan.EnforcementPlan, prof *profile.TargetIntegrationProfile, cfg
 	}
 
 	pack, err := BuildPolicyPack(ep, prof, RuntimePolicyConfig{
-		NodeID:     cfg.NodeID,
-		Generation: cfg.Generation,
-		IssuedAt:   issuedAt,
-		DefaultTTL: cfg.DefaultTTL,
-		Guardrails: cfg.Guardrails,
+		NodeID:        cfg.NodeID,
+		Generation:    cfg.Generation,
+		IssuedAt:      issuedAt,
+		DefaultTTL:    cfg.DefaultTTL,
+		Guardrails:    cfg.Guardrails,
+		ResponseRules: cfg.ResponseRules,
+		AlertRoutes:   cfg.AlertRoutes,
 	})
 	if err != nil {
 		return contracts.RuntimeBundle{}, err
