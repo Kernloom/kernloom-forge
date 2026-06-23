@@ -1,0 +1,71 @@
+# Block-based Natural policy intent for production deployment automation.
+# Common use case: only a trusted CI/CD automation identity may call the
+# production deploy API.
+
+intent "ci-cd-production-deploy"
+
+protect api "production-deploy-api" in "production" as "production deployment control API"
+
+compose:
+  access "ci-cd-production-deploy"
+  requirements "ci-cd-production-context"
+  detection "ci-cd-production-runtime-detections"
+  response "ci-cd-production-runtime-responses"
+  alert_route "platform-ops"
+  guardrail "protect-release-managers"
+  capabilities "ci-cd-production-runtime-capabilities"
+
+access "ci-cd-production-deploy":
+  default deny access to api "production-deploy-api"
+  allow automation_identity "ci-deploy-bot" to access api "production-deploy-api"
+
+requirements "ci-cd-production-context":
+  require "subject.type" eq "automation_identity"
+  require "subject.risk.level" eq "low"
+  require "workload.attestation.status" eq "attested"
+  require "workload.environment" eq "production"
+  require "resource.criticality" eq "critical"
+
+detection "ci-cd-production-runtime-detections":
+  detect "deploy-risk-medium":
+    when risk equals medium
+
+  detect "deploy-risk-high":
+    when risk in ["high", "critical"]
+
+  detect "non-ci-deny-burst":
+    when denied access to api "production-deploy-api" by known subject excluding group "release-engineering" exceeds 3 within 15m
+
+  detect "unknown-source-deny-burst":
+    when denied access to api "production-deploy-api" by unknown source exceeds 10 within 15m
+
+response "ci-cd-production-runtime-responses":
+  on "deploy-risk-medium" then alert route "platform-ops" severity "high" dedupe 15m
+  on "deploy-risk-high" then deny source for 5m
+  on "unknown-source-deny-burst" then rate_limit source for 10m
+
+alert_route "platform-ops":
+  notify group "platform-ops"
+  via ["log", "email"]
+  dedupe by ["tenant.id", "resource.id", "detection.id", "source.identity_or_ip"]
+  create case false
+  require acknowledgement within 30m
+
+guardrail "protect-release-managers":
+  never auto_block group "release-managers"
+  never quarantine group "release-managers"
+  never disable identity group "release-managers"
+
+capabilities "ci-cd-production-runtime-capabilities":
+  require identity_based_access
+  require context "subject.type"
+  require context "subject.risk.level"
+  require context "workload.attestation.status"
+  require context "workload.environment"
+  require context "resource.criticality"
+  require windowed_detection
+  require traffic_rate_limit
+
+gap_handling:
+  fail on missing_context
+  require_approval on identity_to_ip downgrade

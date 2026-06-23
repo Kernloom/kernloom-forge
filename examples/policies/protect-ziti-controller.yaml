@@ -1,8 +1,9 @@
 apiVersion: kernloom.io/v1
 kind: AccessPolicy
 metadata:
-  name: protect-ziti-controller
+  name: protect-ziti-controller-admin-access
   owner: security
+  environment: production
 spec:
   subject:
     type: group

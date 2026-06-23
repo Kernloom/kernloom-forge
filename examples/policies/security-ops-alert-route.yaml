@@ -5,21 +5,17 @@ metadata:
 spec:
   audience:
     type: group
-    ref: group.kernloom-security-ops
+    ref: kernloom-security-ops
   channels:
-    - type: slack
-      ref: channel.security-ops
+    - type: log
+      ref: log.security-ops
     - type: email
-      ref: mailinglist.security-ops
-  defaultSeverity: medium
+      ref: channel.email
   deduplication:
     enabled: true
-    window: 15m
+    window: 15m0s
     keys:
+      - tenant.id
       - resource.id
       - detection.id
       - source.identity_or_ip
-  caseManagement:
-    createCase: false
-  acknowledgement:
-    required: false

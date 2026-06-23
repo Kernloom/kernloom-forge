@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	contracts "github.com/kernloom/kernloom-contracts"
+	registries "github.com/kernloom/kernloom-registries"
 	"gopkg.in/yaml.v3"
 )
 
@@ -72,6 +73,7 @@ func LoadPolicyFromFile(path string) (*Policy, error) {
 }
 
 func (p *Policy) Validate() error {
+	snapshot := embeddedSnapshot()
 	if p.APIVersion == "" {
 		return fmt.Errorf("apiVersion is required")
 	}
@@ -88,23 +90,33 @@ func (p *Policy) Validate() error {
 		if inv.ID == "" {
 			return fmt.Errorf("spec.invariants[%d].id is required", i)
 		}
-		if inv.Type != "never" {
+		if !validGuardrailType(snapshot, inv.Type) {
 			return fmt.Errorf("spec.invariants[%d] (%s): unsupported type %q", i, inv.ID, inv.Type)
+		}
+		if inv.Type != "never" {
+			return fmt.Errorf("spec.invariants[%d] (%s): type %q is registered but not supported by this compiler", i, inv.ID, inv.Type)
 		}
 		if inv.Subject.Type == "" || inv.Subject.Ref == "" {
 			return fmt.Errorf("spec.invariants[%d] (%s): subject.type and subject.ref are required", i, inv.ID)
 		}
+		if !validSubjectType(snapshot, inv.Subject.Type) {
+			return fmt.Errorf("spec.invariants[%d] (%s): subject.type %q is not registered", i, inv.ID, inv.Subject.Type)
+		}
 		if len(inv.ForbiddenActions) == 0 {
 			return fmt.Errorf("spec.invariants[%d] (%s): forbiddenActions must not be empty", i, inv.ID)
+		}
+		if actions := canonicalForbiddenActions(snapshot, inv.ForbiddenActions); len(actions) == 0 {
+			return fmt.Errorf("spec.invariants[%d] (%s): forbiddenActions contain no registered runtime actions", i, inv.ID)
 		}
 	}
 	return nil
 }
 
 func (p *Policy) RuntimeGuardrails() ([]contracts.RuntimeGuardrail, error) {
+	snapshot := embeddedSnapshot()
 	out := make([]contracts.RuntimeGuardrail, 0, len(p.Spec.Invariants))
 	for _, inv := range p.Spec.Invariants {
-		actions := canonicalForbiddenActions(inv.ForbiddenActions)
+		actions := canonicalForbiddenActions(snapshot, inv.ForbiddenActions)
 		if len(actions) == 0 {
 			return nil, fmt.Errorf("invariant %q has no supported forbidden actions", inv.ID)
 		}
@@ -157,12 +169,16 @@ func FromNeverTokens(tokens []string) (contracts.RuntimeGuardrail, error) {
 }
 
 func FromNever(action, subjectType, subjectRef string) (contracts.RuntimeGuardrail, error) {
-	forbidden := canonicalForbiddenActions([]string{action})
+	snapshot := embeddedSnapshot()
+	forbidden := canonicalForbiddenActions(snapshot, []string{action})
 	if len(forbidden) == 0 {
 		return contracts.RuntimeGuardrail{}, fmt.Errorf("unsupported never action %q", action)
 	}
 	if subjectType == "" || subjectRef == "" {
 		return contracts.RuntimeGuardrail{}, fmt.Errorf("never guardrail requires a typed subject")
+	}
+	if !validSubjectType(snapshot, subjectType) {
+		return contracts.RuntimeGuardrail{}, fmt.Errorf("unsupported never subject type %q", subjectType)
 	}
 	id := "never-" + sanitizeID(action) + "-" + sanitizeID(subjectRef)
 	return contracts.RuntimeGuardrail{
@@ -209,12 +225,12 @@ func PolicyFromRuntime(name string, guardrails []contracts.RuntimeGuardrail) Pol
 	}
 }
 
-func canonicalForbiddenActions(actions []string) []string {
+func canonicalForbiddenActions(snapshot contracts.RegistrySnapshot, actions []string) []string {
 	seen := map[string]bool{}
 	var out []string
 	add := func(action string) {
 		action = strings.TrimSpace(action)
-		if action == "" || seen[action] {
+		if action == "" || seen[action] || !validRuntimeAction(snapshot, action) {
 			return
 		}
 		seen[action] = true
@@ -244,12 +260,58 @@ func canonicalForbiddenActions(actions []string) []string {
 }
 
 func isSubjectType(s string) bool {
-	switch s {
+	return validSubjectType(embeddedSnapshot(), s)
+}
+
+func embeddedSnapshot() contracts.RegistrySnapshot {
+	snapshot, err := registries.EmbeddedSnapshot()
+	if err != nil {
+		return contracts.RegistrySnapshot{}
+	}
+	return snapshot
+}
+
+func validGuardrailType(snapshot contracts.RegistrySnapshot, value string) bool {
+	value = normalizeRegistryID(value)
+	for _, entry := range snapshot.GuardrailTypes {
+		if normalizeRegistryID(entry.ID) == value {
+			return true
+		}
+	}
+	return value == "never"
+}
+
+func validSubjectType(snapshot contracts.RegistrySnapshot, value string) bool {
+	value = normalizeRegistryID(value)
+	for _, schema := range snapshot.AccessPolicySchemas {
+		if schema.WireKind != contracts.KindAccessPolicy && schema.ID != "access_policy" {
+			continue
+		}
+		for _, selector := range schema.SubjectSelectorTypes {
+			if normalizeRegistryID(selector.ID) == value && selector.ID != "any" {
+				return true
+			}
+		}
+	}
+	switch value {
 	case "role", "group", "user", "service_account", "workload", "device_identity", "automation_identity", "external_partner":
 		return true
 	default:
 		return false
 	}
+}
+
+func validRuntimeAction(snapshot contracts.RegistrySnapshot, action string) bool {
+	for _, contract := range snapshot.ActionContracts {
+		if contract.ID == action {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeRegistryID(value string) string {
+	return strings.ReplaceAll(strings.ToLower(strings.TrimSpace(value)), "-", "_")
 }
 
 func sanitizeID(s string) string {

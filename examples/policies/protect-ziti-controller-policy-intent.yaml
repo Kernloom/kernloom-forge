@@ -1,0 +1,59 @@
+apiVersion: kernloom.io/v1
+kind: PolicyIntent
+metadata:
+  name: protect-ziti-controller-admin-access-intent
+  owner: security
+  environment: production
+spec:
+  description: Protect the Ziti controller admin interface with strict access, detections, responses, guardrails and capability requirements.
+  protect:
+    resource: ziti-controller
+    environment: production
+  documents:
+    access:
+      - kind: AccessPolicy
+        name: protect-ziti-controller-admin-access
+        ref: protect-ziti-controller.yaml
+        digest: sha256:f3bbf5f93b7876a800b29f0ec74278d866b60d30ffee05e3804395799225219a
+    guardrails:
+      - kind: GuardrailPolicy
+        name: protect-ziti-controller-admin-access-guardrails
+        ref: protect-ziti-controller-guardrails.yaml
+        digest: sha256:2e802bc1cd8f6982da7e0aaa9d951a61bc94b41ff1f044086155daaea672e0d6
+    detections:
+      - kind: DetectionPolicy
+        name: protect-ziti-controller-admin-access-detections
+        ref: protect-ziti-controller-detections.yaml
+        digest: sha256:4e05489f92bdc697b5bfc57927f1da79de46582bb6a2fcd7cf6e5852dde6d16e
+    responses:
+      - kind: ResponsePolicy
+        name: protect-ziti-controller-admin-access-responses
+        ref: protect-ziti-controller-responses.yaml
+        digest: sha256:95e2feb31d2a991b2a5cf88dd427bc627057000b9ba63ac8c1233b60a2b83fe9
+    alertRoutes:
+      - kind: AlertRoute
+        name: alert-route.security-ops
+        ref: security-ops-alert-route.yaml
+        digest: sha256:061a921852a6c4751f3413c0b7855fb3e4b3c554066af5440b76864f3ef5c62b
+    capabilityRequirements:
+      - kind: CapabilityRequirement
+        name: ziti-controller-admin-protection
+        ref: protect-ziti-controller-capabilities.yaml
+        digest: sha256:0d44e6839b155e57d5c89707cadd4d1512c68acfc65e7cafbdf09ed685790b16
+  registries:
+    context: &standardRegistry
+      name: kernloom-standard
+      version: 0.2.0
+      digest: sha256:71a8a96473f30eb07b005cc20f8906fdb2e826d6019aa4509ca9d76ea02cecb0
+    actions: *standardRegistry
+    capabilities: *standardRegistry
+    granularity: *standardRegistry
+    detectionEvaluators: *standardRegistry
+    missingContextBehaviors: *standardRegistry
+    guardrails: *standardRegistry
+    gapHandling: *standardRegistry
+    notifications: *standardRegistry
+    snapshot: *standardRegistry
+  compile:
+    target: klshield-local
+    mode: runtime-bundle

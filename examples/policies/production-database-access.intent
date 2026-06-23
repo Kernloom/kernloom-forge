@@ -1,0 +1,76 @@
+# Block-based Natural policy intent for production database access.
+# Common use case: allow only the production backend service account to reach a
+# restricted customer database, with runtime pressure controls.
+
+intent "production-database-access"
+
+protect database "customer-prod-db" in "production" as "restricted customer production database"
+
+compose:
+  access "production-database-access"
+  requirements "production-database-context"
+  detection "production-database-runtime-detections"
+  response "production-database-runtime-responses"
+  alert_route "platform-ops"
+  guardrail "protect-database-admins"
+  capabilities "production-database-runtime-capabilities"
+
+access "production-database-access":
+  default deny access to database "customer-prod-db"
+  allow service_account "orders-api-prod" to access database "customer-prod-db"
+
+requirements "production-database-context":
+  require "subject.risk.level" eq "low"
+  require "workload.attestation.status" eq "attested"
+  require "workload.environment" eq "production"
+  require "resource.data_class" eq "restricted"
+  require "resource.criticality" eq "critical"
+
+detection "production-database-runtime-detections":
+  detect "database-risk-medium":
+    when risk equals medium
+
+  detect "database-risk-high":
+    when risk in ["high", "critical"]
+
+  detect "unknown-source-deny-burst":
+    when denied access to database "customer-prod-db" by unknown source exceeds 5 within 10m
+
+  detect "sustained-database-pressure":
+    when rate_limit drops to database "customer-prod-db" by unknown source sustained for 5m
+
+response "production-database-runtime-responses":
+  on "database-risk-medium" then alert route "platform-ops" severity "medium" dedupe 15m
+  on "database-risk-medium" then rate_limit source for 10m
+  on "database-risk-high" then deny source for 5m
+  on "sustained-database-pressure" then temporary_block source for 10m
+    require previous action "enforce.traffic.rate_limit" active
+    allow local enforcement state evidence
+    require enforcement target excludes group "database-admins"
+
+alert_route "platform-ops":
+  notify group "platform-ops"
+  via ["log", "email"]
+  dedupe by ["tenant.id", "resource.id", "detection.id", "source.identity_or_ip"]
+  create case false
+  require acknowledgement within 30m
+
+guardrail "protect-database-admins":
+  never auto_block group "database-admins"
+  never quarantine group "database-admins"
+  never disable identity group "database-admins"
+
+capabilities "production-database-runtime-capabilities":
+  require identity_based_access
+  require context "subject.risk.level"
+  require context "workload.attestation.status"
+  require context "workload.environment"
+  require context "resource.data_class"
+  require context "resource.criticality"
+  require windowed_detection
+  require traffic_rate_limit
+  require temporary_traffic_block
+
+gap_handling:
+  fail on missing_context
+  require_approval on identity_to_ip downgrade

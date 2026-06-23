@@ -2,7 +2,7 @@
 
 This is the Forge-side copy/paste path for manual KLIQ tests. It shows:
 
-- how to write a simple `AccessPolicy` intent;
+- how to write Natural Intent as the primary human authoring surface;
 - how Forge builds a `RuntimePolicyPack` for standalone KLIQ;
 - how Forge serves the same intent as a signed `RuntimeBundle` for managed
   mode;
@@ -12,11 +12,10 @@ The KLIQ-side guide is in `kernloom/_docs/testing/manual-test-guide.md`.
 
 ## v0.3.x Quick Path
 
-- Use `forge intent convert` to create `AccessPolicy` YAML.
-- Add `--guardrails-output` when natural intent includes `never ...`.
-- Add `--detection-output` and `--response-output` when natural intent includes
-  `when ... then ...`.
+- Use `forge intent convert --output-dir ... --emit-policy-intent` to create
+  canonical policy documents plus a thin digest-pinned `PolicyIntent`.
 - Use `forge validate` to check the policy.
+- Use `forge intent validate` to check a `PolicyIntent` composition manifest.
 - Use `forge compile` or `forge report` to inspect coverage and gaps.
 - Use `forge export-runtime-policy` for standalone KLIQ.
 - Use `forge build-runtime-bundle` or `forge serve` for managed KLIQ.
@@ -31,11 +30,13 @@ The KLIQ-side guide is in `kernloom/_docs/testing/manual-test-guide.md`.
 
 | Artifact | Created By | Used By | Purpose |
 |---|---|---|---|
-| `AccessPolicy` | Operator / Git-PAP | Forge | Business policy intent |
-| `GuardrailPolicy` | Operator / `forge intent convert --guardrails-output` | Forge, KLIQ runtime resolver | Safety invariants such as "never auto-block admins" |
-| `DetectionPolicy` | Operator / `forge intent convert --detection-output` | Forge, future KLIQ response evaluator | Stateful detections such as denied-access thresholds |
-| `ResponsePolicy` | Operator / `forge intent convert --response-output` | Forge, future KLIQ response evaluator | Runtime responses such as alert, rate-limit, case creation |
-| `AlertRoute` | Operator / Git-PAP | Forge, future notification path | Audience, channels, dedupe, acknowledgement and escalation |
+| Natural Intent `.intent` | Operator / Git-PAP | Forge converter | Human authoring surface |
+| `PolicyIntent` | `forge intent convert` / Git-PAP | Forge | Thin manifest that groups canonical policy documents |
+| `AccessPolicy` | `forge intent convert` / Git-PAP | Forge | Generated business policy intent |
+| `GuardrailPolicy` | `forge intent convert` | Forge, KLIQ runtime resolver | Generated safety invariants such as "never auto-block admins" |
+| `DetectionPolicy` | `forge intent convert` | Forge, KLIQ reaction evaluator | Generated stateful detections such as denied-access thresholds |
+| `ResponsePolicy` | `forge intent convert` | Forge, KLIQ reaction evaluator | Generated runtime responses such as alert, rate-limit, case creation |
+| `AlertRoute` | `forge intent convert` / Git-PAP | Forge, KLIQ alert signal path | Audience, channels, dedupe, acknowledgement and escalation |
 | `EnforcementPlan` | `forge compile` | Operator / report | Shows coverage, downgrades, delegation, gaps |
 | `RuntimePolicyPack` | `forge export-runtime-policy` | Standalone KLIQ with `--policy-file` | Local RuntimePDP rules |
 | `RuntimeBundle` | `forge build-runtime-bundle` or `forge serve` | KLIQ managed mode | Signed bundle with registry snapshot and pack |
@@ -44,240 +45,180 @@ Important: `forge compile --output yaml` creates an `EnforcementPlan`, not a
 file for `kliq --policy-file`. For standalone KLIQ, always use
 `forge export-runtime-policy`.
 
-## Natural Intent To AccessPolicy Path
+## PolicyIntent Composition Manifest
 
-Kernloom may offer a natural policy authoring layer, but it should compile to
-canonical `AccessPolicy` YAML before Forge plans anything. Today,
-`forge intent convert` emits the access policy part and can also emit guardrail
-invariants, detection rules and response rules. Target defaults such as
-`default deny ...` are recognized and reported as warnings until their own IR
-exists.
+`PolicyIntent` is not a runtime policy engine. It is a small manifest that
+groups canonical policy documents so Forge can validate the set together.
 
-Natural authoring form:
-
-```text
-protect "ziti-controller"
-allow group "kernloom-admins" to access "ziti-controller"
-require "subject.risk.level" eq "low"
-require "session.authentication.strength" in ["mfa", "phishing_resistant_mfa"]
-default deny access to "ziti-controller"
-when denied access to "ziti-controller" exceeds 5 within 15m then alert route "security-ops" severity "medium" dedupe 15m
-never auto_block group "kernloom-admins"
-```
-
-Quotes around variable values are optional for simple IDs and recommended for
-readability. They are required when a subject, resource or environment contains
-spaces, punctuation that would confuse tokenization, or a word that also exists
-as a policy keyword.
-
-AccessPolicy YAML shape after today's conversion:
+Example:
 
 ```yaml
 apiVersion: kernloom.io/v1
-kind: AccessPolicy
+kind: PolicyIntent
 metadata:
-  name: protect-ziti-controller
+  name: protect-ziti-controller-admin-access-intent
   owner: security
+  environment: production
 spec:
-  subject:
-    type: group
-    ref: kernloom-admins
-  action: access
-  resource:
-    type: endpoint
-    ref: ziti-controller
-  conditions:
-    - id: require-subject-risk-level
-      type: risk_level
-      signal: subject.risk.level
-      operator: eq
-      value: low
-    - id: require-session-authentication-strength
-      type: authentication_strength
-      signal: session.authentication.strength
-      operator: in
-      value:
-        - mfa
-        - phishing_resistant_mfa
-  effect: allow
+  protect:
+    resource: ziti-controller
+    environment: production
+  documents:
+    access:
+      - kind: AccessPolicy
+        name: protect-ziti-controller-admin-access
+        ref: access.yaml
+        digest: sha256:...
+    requirements:
+      - kind: RequirementPolicy
+        name: low-risk-strong-auth
+        ref: requirements.yaml
+        digest: sha256:...
+    guardrails:
+      - kind: GuardrailPolicy
+        name: protect-ziti-controller-admin-access-guardrails
+        ref: guardrails.yaml
+        digest: sha256:...
+    detections:
+      - kind: DetectionPolicy
+        name: protect-ziti-controller-admin-access-detections
+        ref: detections.yaml
+        digest: sha256:...
+    responses:
+      - kind: ResponsePolicy
+        name: protect-ziti-controller-admin-access-responses
+        ref: responses.yaml
+        digest: sha256:...
+    alertRoutes:
+      - kind: AlertRoute
+        name: alert-route.security-ops
+        ref: security-ops-alert-route.yaml
+        digest: sha256:...
+    capabilityRequirements:
+      - kind: CapabilityRequirement
+        name: ziti-controller-admin-protection
+        ref: capabilities.yaml
+        digest: sha256:...
+  registries:
+    context: &standardRegistry
+      name: kernloom-standard
+      version: 0.2.0
+      digest: sha256:...
+    actions: *standardRegistry
+    capabilities: *standardRegistry
+    granularity: *standardRegistry
+    detectionEvaluators: *standardRegistry
+    missingContextBehaviors: *standardRegistry
+    guardrails: *standardRegistry
+    gapHandling: *standardRegistry
+    notifications: *standardRegistry
+    snapshot: *standardRegistry
+  compile:
+    target: klshield-local
+    mode: runtime-bundle
 ```
 
-The natural lines map like this:
+Validate the manifest and the referenced documents:
 
-| Natural line | Canonical result |
-|---|---|
-| `protect "ziti-controller"` | `resource.type: endpoint`, `resource.ref: ziti-controller` |
-| `allow group "kernloom-admins" to access "ziti-controller"` | `subject.type: group`, `subject.ref: kernloom-admins`, `action: access`, `effect: allow` |
-| `require "subject.risk.level" eq "low"` | `conditions[]` entry with `type: risk_level`, `signal: subject.risk.level`, `operator: eq`, `value: low` |
-| `require "session.authentication.strength" in [...]` | `conditions[]` entry with `type: authentication_strength` and list value |
-| `default deny access to "ziti-controller"` | Recognized today, warning only. Later: target default deny or `RuntimePolicyPack.spec.default_effect: deny` |
-| `when denied access to "ziti-controller" exceeds 5 within 15m then alert route "security-ops" severity "medium" dedupe 15m` | Optional `DetectionPolicy` and `ResponsePolicy` output. The detection holds the threshold. The response references the detection and alert route |
-| `never auto_block group "kernloom-admins"` | Optional `GuardrailPolicy` output. It blocks hard runtime actions that could auto-block that group |
-
-GuardrailPolicy YAML shape after conversion with `--guardrails-output`:
-
-```yaml
-apiVersion: kernloom.io/v1
-kind: GuardrailPolicy
-metadata:
-  name: protect-ziti-controller-guardrails
-spec:
-  invariants:
-    - id: never-auto-block-kernloom-admins
-      type: never
-      subject:
-        type: group
-        ref: kernloom-admins
-      forbiddenActions:
-        - enforce.traffic.drop
-        - enforce.access.deny
-        - enforce.network.quarantine
-        - enforce.identity.disable
-      enforcement:
-        violationBehavior: reject_action
-        unknownBehavior: reject_hard_action
+```bash
+./bin/forge intent validate \
+  --input examples/policies/protect-ziti-controller-policy-intent.yaml
 ```
 
-KLIQ evaluates guardrails before an action reaches the PEP. A direct match is
-rejected. If a hard action has unknown blast radius, KLIQ also rejects it until
-the target subject is known.
+What Forge checks:
 
-Multiple `when ... then ...` statements are fine. The current
-`RuntimePolicyPack` contract carries `detection_rules` and `response_rules`. If
-a natural policy lists several actions for the same condition, Forge should
-expand that into several generated response rules that reference the same
-detection ID.
+- referenced files exist and parse;
+- access, requirement, guardrail, detection, response and alert route documents
+  are valid;
+- response rules reference existing detection IDs;
+- alert actions reference existing alert routes;
+- runtime response actions are known in the registry and have a TTL when they
+  enforce something.
 
-DetectionPolicy YAML shape after conversion with `--detection-output`:
+## Natural Intent Authoring Path
 
-```yaml
-apiVersion: kernloom.io/v1
-kind: DetectionPolicy
-metadata:
-  name: protect-ziti-controller-detections
-spec:
-  rules:
-    - id: denied-access-ziti-controller-exceeds-5-within-15m0s
-      when:
-        type: access.denied_threshold
-        resourceRef: ziti-controller
-        threshold: 5
-        window: 15m
-        scope: source
-      reasonCodes:
-        - denied_access_threshold_exceeded
-```
+Kernloom policy should normally be authored as Natural Intent. This document
+shows runnable examples and CLI flows. The vocabulary itself lives in
+[`natural-intent-vocabulary-cheat-sheet.md`](natural-intent-vocabulary-cheat-sheet.md).
 
-ResponsePolicy YAML shape after conversion with `--response-output`:
+Use the richer Ziti example when you want to see all generated document kinds:
 
-```yaml
-apiVersion: kernloom.io/v1
-kind: ResponsePolicy
-metadata:
-  name: protect-ziti-controller-responses
-spec:
-  mode: ordered
-  stateRequired: true
-  conflictResolution: strongest_allowed_action
-  rules:
-    - id: on-denied-access-ziti-controller-exceeds-5-within-15m0s-alert-route-security-ops
-      when:
-        detection: denied-access-ziti-controller-exceeds-5-within-15m0s
-      then:
-        action:
-          id: notify.alert.emit
-          route: alert-route.security-ops
-          severity: medium
-          dedupe: 15m
-      reasonCodes:
-        - response_on_denied_access_ziti_controller_exceeds_5_within_15m0s
-```
+- `AccessPolicy` for access.
+- `RequirementPolicy` for access context requirements.
+- `DetectionPolicy` for windowed/signal detections.
+- `ResponsePolicy` for alert/rate-limit/block responses.
+- `AlertRoute` for notification routing.
+- `GuardrailPolicy` for safety invariants.
+- `CapabilityRequirement` for required context, features, capabilities and gap
+  handling.
 
-AlertRoute stays separate:
+The important rule: `PolicyIntent` stays thin. It references those canonical
+documents with `sha256:` digests; it is not a mega-YAML replacement for them.
 
-```yaml
-apiVersion: kernloom.io/v1
-kind: AlertRoute
-metadata:
-  name: alert-route.security-ops
-spec:
-  audience:
-    type: group
-    ref: group.kernloom-security-ops
-  channels:
-    - type: slack
-      ref: channel.security-ops
-  defaultSeverity: medium
-  deduplication:
-    enabled: true
-    window: 15m
-    keys:
-      - resource.id
-      - detection.id
-      - source.identity_or_ip
-```
-
-Convert the natural form into canonical YAML:
+Convert the natural form into canonical documents plus a digest-pinned manifest:
 
 ```bash
 ./bin/forge intent convert \
   --input examples/policies/protect-ziti-controller.intent \
-  --output /tmp/kernloom-forge-manual/policies/protect-ziti-controller.yaml \
-  --guardrails-output /tmp/kernloom-forge-manual/policies/protect-ziti-controller-guardrails.yaml \
-  --detection-output /tmp/kernloom-forge-manual/policies/protect-ziti-controller-detections.yaml \
-  --response-output /tmp/kernloom-forge-manual/policies/protect-ziti-controller-responses.yaml \
-  --owner security
+  --output-dir /tmp/kernloom-forge-manual/policies/protect-ziti-controller \
+  --emit-policy-intent \
+  --owner security \
+  --compile-target klshield-local
+
+./bin/forge intent validate \
+  --input /tmp/kernloom-forge-manual/policies/protect-ziti-controller/policy-intent.yaml
 ```
 
 The converter writes warnings for lines that are understood but not emitted into
 `AccessPolicy` yet, such as `when ... then ...`, `never ...`, and `default deny`.
-`never ...` is written to the guardrail output when `--guardrails-output` is
-set. `when ... then ...` is written to the response output when
-`--response-output` is set. If `--detection-output` is also set, the threshold
-is written to a DetectionPolicy and the response references that detection.
+`never ...` is written to `guardrails.yaml`. `when ...` is written to
+`detections.yaml`, and `then ...` is written to `responses.yaml`. Alert actions
+also generate an `AlertRoute` document such as `security-ops-alert-route.yaml`.
+`requirements ...` is written to `requirements.yaml`; `capabilities ...` and
+`gap_handling ...` are written to `capabilities.yaml`. The `policy-intent.yaml`
+manifest references every generated canonical document with a digest.
 
-`alert` is not the only possible response action. Natural intent may use short
-aliases for standard action/capability IDs:
-
-| Natural action | Canonical ID |
-|---|---|
-| `alert route "security-ops" severity "medium" dedupe 15m` | `notify.alert.emit` |
-| `finding` | `export.finding` |
-| `rate_limit` | `enforce.network.rate_limit` |
-| `connection_limit` | `enforce.traffic.connection_limit` |
-| `bandwidth_limit` | `enforce.traffic.bandwidth_limit` |
-| `syn_protect` | `enforce.network.syn_protect` |
-| `deny` or `block` | `enforce.access.deny` |
-| `network_deny` | `enforce.network.deny` |
-| `drop` | `enforce.traffic.drop` |
-| `tarpit` | `enforce.traffic.tarpit` |
-| `quarantine` | `enforce.network.quarantine` |
-
-Canonical action IDs may also be written directly, for example
-`then enforce.traffic.drop for 5m`. Runtime-enforcement actions must still obey
-the registry contract: TTL bounded, leased, audited, auto-reverting, and within
-the target profile's allowed action level.
-
-Current status: Forge accepts the converted canonical YAML form for
-`validate`, `compile`, `report`, `export-runtime-policy`, and
-`build-runtime-bundle`. Forge accepts `GuardrailPolicy` files through
-`--guardrail`, `DetectionPolicy` files through `--detection`, `ResponsePolicy`
-files through `--response`, and `AlertRoute` files through `--alert-route` on
+Current status: Forge accepts either individual generated canonical document
+files or a generated `PolicyIntent` for `compile`, `report`,
 `export-runtime-policy`, `build-runtime-bundle`, and `serve`.
 
 Example files:
 
 - `examples/policies/protect-ziti-controller.intent`: natural authoring example.
-- `examples/policies/protect-ziti-controller.yaml`: converted YAML that Forge can
-  validate and compile today.
-- `examples/policies/protect-ziti-controller-guardrails.yaml`: optional
-  guardrail output for the natural `never ...` line.
-- `examples/policies/protect-ziti-controller-detections.yaml`: optional
-  detection output for the natural `when ...` condition.
-- `examples/policies/protect-ziti-controller-responses.yaml`: optional response
-  output for the natural `then ...` action.
-- `examples/policies/security-ops-alert-route.yaml`: reusable route for alert
-  delivery.
+- `examples/policies/manual-edge-access.intent`: small natural authoring example
+  for the standalone KLIQ smoke test.
+- `examples/policies/admin-apps-zero-trust.intent`: privileged admin app
+  access with phishing-resistant MFA, managed device posture and break-glass
+  guardrails.
+- `examples/policies/finance-payroll-access.intent`: finance/payroll access
+  with confidential data context, compliance alerting and approver guardrails.
+- `examples/policies/production-database-access.intent`: service-account access
+  to a restricted production database with workload attestation and runtime
+  pressure controls.
+- `examples/policies/ci-cd-production-deploy.intent`: CI/CD automation access
+  to the production deployment API.
+- `examples/policies/vendor-remote-access.intent`: approved third-party access
+  through the zero-trust overlay with scan and deny-burst reactions.
+- `examples/policies/public-api-abuse-protection.intent`: internet-facing API
+  baseline with signal-driven rate-limit and temporary block responses.
+- `examples/policies/multi-pdp-pep.intent`: generic Natural Intent with
+  explicit requirements, runtime responses and capability-based auto-placement.
+- `examples/policies/investor-apps-access.intent`: block-based natural
+  authoring example for investor application access.
+- `examples/policies/protect-ziti-controller.yaml`: generated fixture YAML kept
+  for parser and loader examples.
+- `/tmp/kernloom-forge-manual/policies/protect-ziti-controller/policy-intent.yaml`:
+  generated composition manifest when using `--output-dir --emit-policy-intent`.
+- `examples/policies/protect-ziti-controller-guardrails.yaml`: generated
+  guardrail fixture for the natural `never ...` line.
+- `examples/policies/protect-ziti-controller-detections.yaml`: generated
+  detection fixture for the natural `when ...` condition.
+- `examples/policies/protect-ziti-controller-responses.yaml`: generated
+  response fixture for the natural `then ...` action.
+- `examples/policies/protect-ziti-controller-capabilities.yaml`: generated
+  capability and gap-handling fixture for the natural `capabilities ...` block.
+- `examples/policies/security-ops-alert-route.yaml`: reusable/generated-style
+  route fixture for alert delivery.
 
 ## Setup
 
@@ -300,67 +241,127 @@ go build -o bin/kliq ./iq/cmd/kliq
 ## 1. Base Intent: Risk And Device Posture
 
 This intent is small enough for the first test, but complete enough to create
-two compensating runtime rules.
+two compensating runtime rules. Write it as Natural Intent and let Forge emit
+the canonical documents.
 
 ```bash
 cd /home/adrian/prj/ebpf-security/kernloom-forge
 
-cat > /tmp/kernloom-forge-manual/policies/manual-edge-access.yaml <<'EOF'
-apiVersion: kernloom.io/v1
-kind: AccessPolicy
-metadata:
-  name: manual-edge-access
-  owner: lab-operator
-spec:
-  subject:
-    type: role
-    ref: edge-clients
-  action: access
-  resource:
-    type: service
-    ref: public-edge
-  conditions:
-    - id: require-low-risk
-      type: risk_level
-      signal: subject.risk.level
-      operator: eq
-      value: low
-    - id: require-healthy-device
-      type: device_posture
-      signal: device.posture.status
-      operator: eq
-      value: healthy
-  effect: allow
+cat > /tmp/kernloom-forge-manual/policies/manual-edge-access.intent <<'EOF'
+intent "manual-edge-access"
+
+protect service "public-edge" in "production" as "public edge service"
+
+compose:
+  access "manual-edge-access"
+  requirements "manual-edge-context"
+  detection "manual-edge-runtime-detections"
+  response "manual-edge-runtime-responses"
+  alert_route "security-ops"
+  guardrail "never-autoblock-kernloom-admins"
+  capabilities "manual-edge-runtime-capabilities"
+
+access "manual-edge-access":
+  allow all
+
+requirements "manual-edge-context":
+  require "subject.risk.level" eq "low"
+  require "device.posture.status" eq "healthy"
+
+detection "manual-edge-runtime-detections":
+  detect "risk-elevated":
+    when risk at least medium
+
+  detect "risk-high":
+    when risk at least high
+
+  detect "unknown-source-deny":
+    when denied access to "public-edge" by unknown source exceeds 5 within 15m
+
+  detect "sustained-pressure":
+    when rate_limit drops to "public-edge" by unknown source sustained for 5m
+
+response "manual-edge-runtime-responses":
+  on "risk-elevated" then rate_limit source at 100 pps for 15m
+  on "risk-high" then alert route "security-ops" severity "high" dedupe 1m
+  on "sustained-pressure" then temporary_block source for 10m
+    require previous action "enforce.traffic.rate_limit" active
+    allow local enforcement state evidence
+    require enforcement target excludes group "kernloom-admins"
+
+alert_route "security-ops":
+  notify group "kernloom-security-ops"
+  via ["log", "email"]
+  dedupe by ["tenant.id", "resource.id", "detection.id", "source.identity_or_ip"]
+  create case false
+
+guardrail "never-autoblock-kernloom-admins":
+  never auto_block group "kernloom-admins"
+  never quarantine group "kernloom-admins"
+  never disable identity group "kernloom-admins"
+
+capabilities "manual-edge-runtime-capabilities":
+  require context "subject.risk.level"
+  require context "device.posture.status"
+  require windowed_detection
+  require traffic_rate_limit
+  require temporary_traffic_block
+
+gap_handling:
+  fail on missing_context
+  require_approval on identity_to_ip downgrade
 EOF
+
+./bin/forge intent convert \
+  --input /tmp/kernloom-forge-manual/policies/manual-edge-access.intent \
+  --output-dir /tmp/kernloom-forge-manual/policies/manual-edge-access \
+  --emit-policy-intent \
+  --name manual-edge-access \
+  --owner lab-operator
 ```
 
 Registry terms used here:
 
-| Field | Registry |
+| Natural phrase | Registry meaning |
 |---|---|
-| `kind: AccessPolicy` | Policy Kind Registry |
-| `subject.type: role` | AccessPolicy selector; later mapped to canonical subjects |
-| `resource.type: service` | AccessPolicy schema + Entity Taxonomy |
-| `conditions[].type` | Policy Condition Type Registry |
-| `conditions[].operator` | Policy Operator Registry |
+| `allow all` | AccessPolicy wildcard subject selector; useful for KLShield-local runtime checks without IdP dependency |
+| `access service "public-edge"` | AccessPolicy action/resource selector + Entity Taxonomy |
+| `require ... eq ...` | Policy Condition Type Registry + Policy Operator Registry |
 | `subject.risk.level` | Context Key + Risk Taxonomy |
 | `device.posture.status` | Context Key |
+| `when risk equals ...` | Generated `DetectionPolicy` with `metric.threshold` over `subject.risk.level` |
+| `when denied access ... by unknown source exceeds ...` | Generated windowed detection over denied access events grouped by unknown source |
+| `when rate_limit drops ... sustained ...` | Generated sustained-pressure detection over local rate-limit drop telemetry |
+| `rate_limit source at 100 pps for 15m` | Generated TTL-bounded `ResponsePolicy` action `enforce.traffic.rate_limit` with per-decision `rate_pps` |
+| `temporary_block source for 10m` | Generated TTL-bounded `ResponsePolicy` action `enforce.traffic.drop` |
+| `require previous action ... active` | Response-chaining guard for escalation actions |
+| `allow local enforcement state evidence` | KLIQ may use local runtime state as evidence for that chain |
+| `require enforcement target excludes group ...` | Blast-radius guard on the response action |
+| `capabilities ...` and `gap_handling ...` | Generated `CapabilityRequirement` document referenced by `PolicyIntent` |
 | `low`, `healthy`, `unknown` | Allowed canonical values |
 
 ## 2. Check The Intent With Forge
 
 ```bash
 ./bin/forge validate \
-  --policy /tmp/kernloom-forge-manual/policies/manual-edge-access.yaml
+  --policy /tmp/kernloom-forge-manual/policies/manual-edge-access/access.yaml
+
+./bin/forge intent validate \
+  --input /tmp/kernloom-forge-manual/policies/manual-edge-access/policy-intent.yaml
+
+./bin/forge intent support \
+  --input /tmp/kernloom-forge-manual/policies/manual-edge-access.intent \
+  --target klshield-local \
+  --output /tmp/kernloom-forge-manual/out/manual-edge-support.yaml
 
 ./bin/forge compile \
-  --policy /tmp/kernloom-forge-manual/policies/manual-edge-access.yaml \
+  --intent /tmp/kernloom-forge-manual/policies/manual-edge-access/policy-intent.yaml \
   --adapters examples/adapters \
   --profiles examples/profiles \
   --output summary
 
 ./bin/forge report \
-  --policy /tmp/kernloom-forge-manual/policies/manual-edge-access.yaml \
+  --intent /tmp/kernloom-forge-manual/policies/manual-edge-access/policy-intent.yaml \
   --adapters examples/adapters \
   --profiles examples/profiles \
   --output /tmp/kernloom-forge-manual/out/manual-edge-report.yaml
@@ -373,6 +374,10 @@ Expected:
   `klshield-local`.
 - Context-sensitive compensating controls include `runtimeNotes` that explain
   how missing or unknown evidence is handled.
+- `manual-edge-support.yaml` is a `NaturalIntentSupportReport` with
+  `enforced`, `carried`, and `warnings` counters for policy writers.
+- The generated `PolicyIntent` references a `CapabilityRequirement` document
+  for context keys, reaction capabilities and gap handling.
 - The report has no unexpected `unsupported` requirements.
 
 Debug:
@@ -384,17 +389,17 @@ grep -E 'target:|deployable:|status:|support:|fidelity:|downgrade|compensating|r
 
 ## 3. Build A RuntimePolicyPack For Standalone KLIQ
 
-The `--guardrail`, `--detection`, `--response`, and `--alert-route` flags are
-optional. Use them only when you created those files, for example through
-`intent convert --guardrails-output --detection-output --response-output` plus a
-reusable AlertRoute file.
+The normal path is `--intent .../policy-intent.yaml`. The older `--policy`,
+`--guardrail`, `--detection`, `--response`, and `--alert-route` flags remain
+useful for fixture-level debugging, but they should not be the first manual
+workflow.
 For source-only adapters, a group guardrail can reject hard actions when the
 subject is unknown. That is safer, but it can also prevent source blocks until
 identity context is available.
 
 ```bash
 ./bin/forge export-runtime-policy \
-  --policy /tmp/kernloom-forge-manual/policies/manual-edge-access.yaml \
+  --intent /tmp/kernloom-forge-manual/policies/manual-edge-access/policy-intent.yaml \
   --adapters examples/adapters \
   --profiles examples/profiles \
   --target klshield-local \
@@ -402,20 +407,16 @@ identity context is available.
   --output /tmp/kernloom-forge-manual/out/manual-edge-runtime-pack.yaml
 ```
 
-Optional guarded and routed response variant:
+Guarded and routed response variant from the richer Natural Intent example:
 
 ```bash
 ./bin/forge export-runtime-policy \
-  --policy /tmp/kernloom-forge-manual/policies/manual-edge-access.yaml \
+  --intent /tmp/kernloom-forge-manual/policies/protect-ziti-controller/policy-intent.yaml \
   --adapters examples/adapters \
   --profiles examples/profiles \
   --target klshield-local \
-  --guardrail /tmp/kernloom-forge-manual/policies/protect-ziti-controller-guardrails.yaml \
-  --detection /tmp/kernloom-forge-manual/policies/protect-ziti-controller-detections.yaml \
-  --response /tmp/kernloom-forge-manual/policies/protect-ziti-controller-responses.yaml \
-  --alert-route examples/policies/security-ops-alert-route.yaml \
   --ttl 30s \
-  --output /tmp/kernloom-forge-manual/out/manual-edge-runtime-pack-routed.yaml
+  --output /tmp/kernloom-forge-manual/out/protect-ziti-controller-runtime-pack.yaml
 ```
 
 Check the pack:
@@ -428,19 +429,19 @@ grep -E 'kind: RuntimePolicyPack|capabilities_required:|guardrails:|detection_ru
 Expected:
 
 - `kind: RuntimePolicyPack`
-- `capability: enforce.access.deny`
-- `guardrails:` when a `--guardrail` file was provided
-- `detection_rules:` when a `--detection` file was provided
-- `response_rules:` when a `--response` file was provided
-- `alert_routes:` when an `--alert-route` file was provided
-- a rule for `risk.level in ['high', 'critical']`
+- `guardrails:`, `detection_rules:`, `response_rules:` and `alert_routes:`
+  when the generated `PolicyIntent` references those documents
+- `capability: enforce.traffic.rate_limit`
+- `capability: enforce.traffic.drop`
+- a rule for `risk.level in ['medium', 'high', 'critical']`
 - a rule for `device.posture.status in ['degraded', 'unhealthy']`
+- response rules for `risk-elevated`, `risk-high`, and `sustained-pressure`
+- previous-action params such as `previous_action_id`
 
-Why `deny`? In the example target `klshield-local`, `risk_level` and
-`device_posture` are mapped as compensating restrictions. Forge therefore
-creates local RuntimePDP rules for known bad evidence. Missing or unknown
-context must stay transparent in the Forge report and must not silently become
-a hard runtime block.
+In the example target `klshield-local`, `risk_level` and `device_posture` are
+mapped as compensating restrictions. Forge therefore creates local RuntimePDP
+rules for known bad evidence. Missing or unknown context must stay transparent
+in the Forge report and must not silently become a hard runtime block.
 
 ## 4. Load The Pack In Standalone KLIQ
 
@@ -465,7 +466,7 @@ timeout 12s ./bin/kliq run \
 Expected:
 
 - `Policy loaded: ... kind=RuntimePolicyPack`
-- `[runtime-pdp] pack loaded: 2 rules`
+- `[runtime-pdp] pack loaded: 3 rules`
 - `RuntimePDP mode: SHADOW`
 - no parse or compile errors.
 
@@ -503,14 +504,11 @@ cd /home/adrian/prj/ebpf-security/kernloom-forge
   --public /tmp/kernloom-forge-manual/out/forge-runtime.pub
 ```
 
-Build one bundle as a file:
-
-The same optional `--guardrail`, `--detection`, `--response`, and
-`--alert-route` flags are used for signed bundles and served bundles.
+Build one bundle as a file from the generated `PolicyIntent`:
 
 ```bash
 ./bin/forge build-runtime-bundle \
-  --policy /tmp/kernloom-forge-manual/policies/manual-edge-access.yaml \
+  --intent /tmp/kernloom-forge-manual/policies/manual-edge-access/policy-intent.yaml \
   --adapters examples/adapters \
   --profiles examples/profiles \
   --target klshield-local \
@@ -543,16 +541,20 @@ Start Forge as the control plane:
 ```bash
 ./bin/forge serve \
   --addr :18443 \
-  --policy /tmp/kernloom-forge-manual/policies/manual-edge-access.yaml \
+  --intent /tmp/kernloom-forge-manual/policies/manual-edge-access/policy-intent.yaml \
   --adapters examples/adapters \
   --profiles examples/profiles \
-  --target klshield-local \
   --signing-key /tmp/kernloom-forge-manual/out/forge-runtime.key \
   --enroll-token-store /tmp/kernloom-forge-manual/out/enroll-tokens.yaml \
   --generation 1 \
   --runtime-pdp-mode shadow \
   --failover fail_static
 ```
+
+With no `--target`, Forge uses the enrolled node's reported adapter and
+effective capabilities to choose the deployable target pack. Add `--target` for
+a forced single target, or `--assignments` when you need explicit node
+selection by node ID, adapter, capability, or inventory labels.
 
 Health check:
 
@@ -572,6 +574,7 @@ timeout 30s ./bin/kliq run \
   --mode=managed \
   --forge-url=http://localhost:18443 \
   --forge-enroll-token=PASTE_ENROLL_TOKEN_HERE \
+  --node-labels=role=edge-gateway,env=production,service=public-edge \
   --policy-verify-key=/tmp/kernloom-forge-manual/out/forge-runtime.pub \
   --runtime-pdp-mode=shadow \
   --dry-run=true \
@@ -600,7 +603,7 @@ used/unused token state on disk.
 |---|---|---|---|
 | Risk gate only | One condition: `subject.risk.level == low` | `klshield-local` | Small pack with one deny rule for high/critical risk |
 | Risk + device posture | Base example above | `klshield-local` | Two compensating runtime rules |
-| Investor apps overlay | `examples/policies/investor-apps-access.yaml` | `openziti-production` | MFA delegated, device posture partial, risk as compensating runtime control |
+| Investor apps overlay | `examples/policies/investor-apps-access.intent` | `openziti-production` | MFA delegated, risk as compensating runtime control |
 | Network tuple governance | Conditions on `network.protocol` and `network.port` | `klshield-local` or `netfilter` | Good report/mapping check; may end without runtime rules |
 | Strict admin Config PDP | MFA + risk + device posture, `allowDelegation: false`, `allowSemanticDowngrade: false` | `openziti-production` | Config PDP should deny when delegation or downgrade would be needed |
 
@@ -609,14 +612,22 @@ Investor example:
 ```bash
 cd /home/adrian/prj/ebpf-security/kernloom-forge
 
+./bin/forge intent convert \
+  --input examples/policies/investor-apps-access.intent \
+  --output-dir /tmp/kernloom-forge-manual/policies/investor-apps \
+  --emit-policy-intent \
+  --name investor-apps-access \
+  --owner security \
+  --compile-target openziti-production
+
 ./bin/forge report \
-  --policy examples/policies/investor-apps-access.yaml \
+  --intent /tmp/kernloom-forge-manual/policies/investor-apps/policy-intent.yaml \
   --adapters examples/adapters \
   --profiles examples/profiles \
   --output /tmp/kernloom-forge-manual/out/investor-report.yaml
 
 ./bin/forge export-runtime-policy \
-  --policy examples/policies/investor-apps-access.yaml \
+  --intent /tmp/kernloom-forge-manual/policies/investor-apps/policy-intent.yaml \
   --adapters examples/adapters \
   --profiles examples/profiles \
   --target openziti-production \
@@ -628,7 +639,7 @@ Strict Config PDP example:
 
 ```bash
 ./bin/forge config-pdp validate \
-  --policy examples/policies/investor-apps-access.yaml \
+  --intent /tmp/kernloom-forge-manual/policies/investor-apps/policy-intent.yaml \
   --adapters examples/adapters \
   --profiles examples/profiles \
   --target openziti-production \

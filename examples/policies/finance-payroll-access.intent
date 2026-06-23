@@ -1,0 +1,73 @@
+# Block-based Natural policy intent for finance and payroll systems.
+# Common use case: let finance staff access sensitive business systems only
+# from healthy, managed devices with strong authentication.
+
+intent "finance-payroll-access"
+
+protect application_group "finance-payroll" in "production" as "payroll and finance applications"
+
+compose:
+  access "finance-payroll-access"
+  requirements "finance-payroll-context"
+  detection "finance-payroll-runtime-detections"
+  response "finance-payroll-runtime-responses"
+  alert_route "compliance-ops"
+  guardrail "protect-finance-approvers"
+  capabilities "finance-payroll-runtime-capabilities"
+
+access "finance-payroll-access":
+  default deny access to application_group "finance-payroll"
+  allow group "finance-staff" to access application_group "finance-payroll"
+
+requirements "finance-payroll-context":
+  require "session.authentication.strength" in ["mfa", "phishing_resistant_mfa"]
+  require "subject.risk.level" eq "low"
+  require "device.management.status" eq "managed"
+  require "device.posture.status" eq "healthy"
+  require "resource.data_class" in ["confidential", "restricted"]
+  require "resource.environment" eq "production"
+
+detection "finance-payroll-runtime-detections":
+  detect "finance-risk-medium":
+    when risk equals medium
+
+  detect "finance-risk-high":
+    when risk in ["high", "critical"]
+
+  detect "non-finance-deny-burst":
+    when denied access to application_group "finance-payroll" by known subject excluding group "finance-staff" exceeds 3 within 15m
+
+  detect "unknown-source-deny-burst":
+    when denied access to application_group "finance-payroll" by unknown source exceeds 10 within 15m
+
+response "finance-payroll-runtime-responses":
+  on "finance-risk-medium" then alert route "compliance-ops" severity "medium" dedupe 15m
+  on "finance-risk-high" then deny source for 5m
+  on "unknown-source-deny-burst" then rate_limit source for 15m
+
+alert_route "compliance-ops":
+  notify group "compliance-ops"
+  via ["log", "email"]
+  dedupe by ["tenant.id", "resource.id", "detection.id", "source.identity_or_ip"]
+  create case false
+  require acknowledgement within 1h
+
+guardrail "protect-finance-approvers":
+  never auto_block group "finance-approvers"
+  never quarantine group "finance-approvers"
+  never disable identity group "finance-approvers"
+
+capabilities "finance-payroll-runtime-capabilities":
+  require identity_based_access
+  require context "session.authentication.strength"
+  require context "subject.risk.level"
+  require context "device.management.status"
+  require context "device.posture.status"
+  require context "resource.data_class"
+  require context "resource.environment"
+  require windowed_detection
+  require traffic_rate_limit
+
+gap_handling:
+  fail on missing_context
+  require_approval on identity_to_ip downgrade

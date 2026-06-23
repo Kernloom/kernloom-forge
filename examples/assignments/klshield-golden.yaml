@@ -1,0 +1,21 @@
+apiVersion: kernloom.io/v1alpha1
+kind: NodePolicyAssignments
+metadata:
+  name: klshield-golden-assignments
+spec:
+  assignments:
+    - id: protect-ziti-controller-on-klshield
+      intent: ../policies/protect-ziti-controller-policy-intent.yaml
+      target: klshield-local
+      nodeSelector:
+        labels:
+          role: edge-gateway
+          env: production
+          service: ziti-controller
+        adapters:
+          - klshield
+        capabilities:
+          - enforce.traffic.rate_limit
+          - enforce.traffic.drop
+      requiredCapabilities:
+        - enforce.traffic.drop

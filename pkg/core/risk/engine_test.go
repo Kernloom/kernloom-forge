@@ -114,6 +114,31 @@ func TestEvaluate_ScenarioNormal(t *testing.T) {
 	}
 }
 
+func TestEvaluate_DeterministicAssessmentID(t *testing.T) {
+	snapshot := snap(
+		fact("device.posture.status", "unhealthy"),
+		fact("session.authentication.strength", "mfa"),
+	)
+
+	first, err := risk.Evaluate(testModel, snapshot, nil, now)
+	if err != nil {
+		t.Fatalf("Evaluate first: %v", err)
+	}
+	second, err := risk.Evaluate(testModel, snapshot, nil, now)
+	if err != nil {
+		t.Fatalf("Evaluate second: %v", err)
+	}
+	if first.Assessment.Metadata.ID == "" {
+		t.Fatal("assessment ID must be populated")
+	}
+	if first.Assessment.Metadata.ID != second.Assessment.Metadata.ID {
+		t.Fatalf("assessment ID not deterministic: %q != %q", first.Assessment.Metadata.ID, second.Assessment.Metadata.ID)
+	}
+	if first.Assessment.Spec.Scope.Type == "" || first.Assessment.Spec.Scope.Ref == "" {
+		t.Fatalf("assessment scope not populated: %#v", first.Assessment.Spec.Scope)
+	}
+}
+
 // TestEvaluate_ScenarioUnhealthyDevice — device posture is unhealthy → high risk.
 func TestEvaluate_ScenarioUnhealthyDevice(t *testing.T) {
 	snapshot := snap(

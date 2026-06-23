@@ -1,11 +1,60 @@
-# Natural policy intent example.
-# This is an authoring/import surface. Convert it to AccessPolicy YAML before
-# running forge validate/compile/export-runtime-policy.
+# Block-based Natural policy intent example.
+# This is the human authoring surface. Convert it to canonical policy documents
+# plus a digest-pinned PolicyIntent before running Forge compile/export paths.
 
-protect "ziti-controller"
-allow group "kernloom-admins" to access "ziti-controller"
-require "subject.risk.level" eq "low"
-require "session.authentication.strength" in ["mfa", "phishing_resistant_mfa"]
-default deny access to "ziti-controller"
-when denied access to "ziti-controller" exceeds 5 within 15m then alert route "security-ops" severity "medium" dedupe 15m
-never auto_block group "kernloom-admins"
+intent "protect-ziti-controller-admin-access"
+
+protect "ziti-controller" in "production" as "critical admin interface"
+
+compose:
+  access "ziti-controller-admin-access"
+  requirements "low-risk-strong-auth"
+  detection "ziti-controller-denied-access"
+  response "ziti-controller-deny-escalation"
+  alert_route "security-ops"
+  guardrail "never-autoblock-kernloom-admins"
+  capabilities "ziti-controller-admin-protection"
+
+access "ziti-controller-admin-access":
+  default deny access to "ziti-controller"
+  allow group "kernloom-admins" to access "ziti-controller"
+
+requirements "low-risk-strong-auth":
+  require "subject.risk.level" eq "low"
+  require "session.authentication.strength" in ["mfa", "phishing_resistant_mfa"]
+
+detection "ziti-controller-denied-access":
+  detect "unknown-source-heavy-deny":
+    when denied access to "ziti-controller" by unknown source exceeds 20 within 15m
+
+  detect "sustained-pressure":
+    when rate_limit drops to "ziti-controller" by unknown source sustained for 5m
+
+response "ziti-controller-deny-escalation":
+  on "unknown-source-heavy-deny" then rate_limit source for 15m
+  on "sustained-pressure" then temporary_block source for 10m
+    require previous action "enforce.traffic.rate_limit" active
+    allow local enforcement state evidence
+    require enforcement target excludes group "kernloom-admins"
+
+alert_route "security-ops":
+  notify group "kernloom-security-ops"
+  via ["log", "email"]
+  dedupe by ["tenant.id", "resource.id", "detection.id", "source.identity_or_ip"]
+  create case false
+
+guardrail "never-autoblock-kernloom-admins":
+  never auto_block group "kernloom-admins"
+  never quarantine group "kernloom-admins"
+  never disable identity group "kernloom-admins"
+
+capabilities "ziti-controller-admin-protection":
+  require context "subject.risk.level"
+  require context "session.authentication.strength"
+  require windowed_detection
+  require traffic_rate_limit
+  require temporary_traffic_block
+
+gap_handling:
+  fail on missing_context
+  require_approval on identity_to_ip downgrade

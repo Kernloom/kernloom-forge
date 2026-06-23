@@ -8,12 +8,19 @@
 //
 //	POST /api/v1/nodes/enroll
 //	POST /api/v1/nodes/{id}/heartbeat
+//	POST /api/v1/nodes/{id}/inventory
 //	GET  /api/v1/nodes/{id}/runtime-bundle
 //	POST /api/v1/nodes/{id}/runtime-bundle/status
 //	POST /api/v1/nodes/{id}/bundle-acks
 //	POST /api/v1/nodes/{id}/receipts
+//	POST /api/v1/nodes/{id}/risk-assessments
 //	POST /api/v1/nodes/{id}/findings
 //	POST /api/v1/nodes/{id}/baseline-proposals
+//	POST /api/v1/nodes/{id}/graph-proposals
+//	POST /api/v1/nodes/{id}/health-reports
+//	POST /api/v1/nodes/{id}/decision-summaries
+//	POST /api/v1/nodes/{id}/adapter-status
+//	POST /api/v1/nodes/{id}/failover-status
 //
 // This is an MVP server. Enrollment and per-node session tokens are enforced
 // in memory, but there is no persistent node registry and no multi-tenant
@@ -28,16 +35,35 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
+
+	contracts "github.com/kernloom/kernloom-contracts"
+	"gopkg.in/yaml.v3"
 )
+
+// NodeRecord is the server's current view of an enrolled node.
+type NodeRecord struct {
+	NodeID       string                          `json:"node_id" yaml:"node_id"`
+	Mode         string                          `json:"mode,omitempty" yaml:"mode,omitempty"`
+	KLIQVersion  string                          `json:"kliq_version,omitempty" yaml:"kliq_version,omitempty"`
+	Inventory    contracts.ComponentInventory    `json:"inventory,omitempty" yaml:"inventory,omitempty"`
+	ConfigReport contracts.KLIQConfigAssetReport `json:"config_report,omitempty" yaml:"config_report,omitempty"`
+	EnrolledAt   time.Time                       `json:"enrolled_at" yaml:"enrolled_at"`
+	LastSeenAt   time.Time                       `json:"last_seen_at" yaml:"last_seen_at"`
+}
 
 // BundleProvider is called by the server to produce the current signed bundle
 // bytes for a given node ID. The server does not cache bundles itself.
 type BundleProvider func(ctx context.Context, nodeID string) ([]byte, error)
+
+// NodeAwareBundleProvider receives the enrolled node record before producing a
+// bundle. Use this when bundle assignment depends on reported capabilities.
+type NodeAwareBundleProvider func(ctx context.Context, node NodeRecord) ([]byte, error)
 
 // ServerOptions configures the MVP control-plane server.
 type ServerOptions struct {
@@ -57,6 +83,9 @@ type ServerOptions struct {
 	// SessionTTL controls how long generated node session tokens are valid.
 	// Zero means 24 hours.
 	SessionTTL time.Duration
+
+	// NodeAwareBundleProvider supersedes the legacy BundleProvider when set.
+	NodeAwareBundleProvider NodeAwareBundleProvider
 }
 
 type nodeSession struct {
@@ -69,18 +98,29 @@ type nodeSession struct {
 type Server struct {
 	mux            *http.ServeMux
 	bundleProvider BundleProvider
+	nodeProvider   NodeAwareBundleProvider
 	logger         *log.Logger
 	requireAuth    bool
 	sessionTTL     time.Duration
 	tokenValidator func(nodeID, token string) error
 
-	// In-memory auth, receipt and finding store (MVP - not persistent).
-	mu           sync.Mutex
-	enrollTokens map[string]struct{}
-	sessions     map[string]nodeSession // session token -> session
-	nodeSessions map[string]string      // nodeID -> current session token
-	receipts     map[string][]json.RawMessage
-	findings     map[string][]json.RawMessage
+	// In-memory auth and artifact store (MVP - not persistent).
+	mu                sync.Mutex
+	enrollTokens      map[string]struct{}
+	sessions          map[string]nodeSession // session token -> session
+	nodeSessions      map[string]string      // nodeID -> current session token
+	nodes             map[string]NodeRecord
+	bundleAcks        map[string][]contracts.RuntimeBundleAck
+	runtimeStatuses   map[string][]contracts.RuntimeStatus
+	receipts          map[string][]contracts.EnforcementReceipt
+	riskAssessments   map[string][]contracts.LocalRiskAssessment
+	findings          map[string][]contracts.RuntimeFinding
+	baselineProposals map[string][]contracts.BaselineProposal
+	graphProposals    map[string][]contracts.GraphProposal
+	healthReports     map[string][]contracts.HealthReport
+	decisionSummaries map[string][]contracts.RuntimeDecisionSummary
+	adapterStatuses   map[string][]contracts.AdapterStatus
+	failoverStatuses  map[string][]contracts.FailoverStatus
 }
 
 // NewServer creates a Server. bundleProvider may be nil (bundle endpoint
@@ -106,17 +146,28 @@ func NewServerWithOptions(provider BundleProvider, logger *log.Logger, opts Serv
 		}
 	}
 	s := &Server{
-		mux:            http.NewServeMux(),
-		bundleProvider: provider,
-		logger:         logger,
-		requireAuth:    opts.RequireAuth,
-		sessionTTL:     sessionTTL,
-		tokenValidator: opts.EnrollTokenValidator,
-		enrollTokens:   enrollTokens,
-		sessions:       make(map[string]nodeSession),
-		nodeSessions:   make(map[string]string),
-		receipts:       make(map[string][]json.RawMessage),
-		findings:       make(map[string][]json.RawMessage),
+		mux:               http.NewServeMux(),
+		bundleProvider:    provider,
+		nodeProvider:      opts.NodeAwareBundleProvider,
+		logger:            logger,
+		requireAuth:       opts.RequireAuth,
+		sessionTTL:        sessionTTL,
+		tokenValidator:    opts.EnrollTokenValidator,
+		enrollTokens:      enrollTokens,
+		sessions:          make(map[string]nodeSession),
+		nodeSessions:      make(map[string]string),
+		nodes:             make(map[string]NodeRecord),
+		bundleAcks:        make(map[string][]contracts.RuntimeBundleAck),
+		runtimeStatuses:   make(map[string][]contracts.RuntimeStatus),
+		receipts:          make(map[string][]contracts.EnforcementReceipt),
+		riskAssessments:   make(map[string][]contracts.LocalRiskAssessment),
+		findings:          make(map[string][]contracts.RuntimeFinding),
+		baselineProposals: make(map[string][]contracts.BaselineProposal),
+		graphProposals:    make(map[string][]contracts.GraphProposal),
+		healthReports:     make(map[string][]contracts.HealthReport),
+		decisionSummaries: make(map[string][]contracts.RuntimeDecisionSummary),
+		adapterStatuses:   make(map[string][]contracts.AdapterStatus),
+		failoverStatuses:  make(map[string][]contracts.FailoverStatus),
 	}
 	s.registerRoutes()
 	return s
@@ -124,6 +175,17 @@ func NewServerWithOptions(provider BundleProvider, logger *log.Logger, opts Serv
 
 // Handler returns the HTTP handler for use with http.ListenAndServe.
 func (s *Server) Handler() http.Handler { return s.mux }
+
+// Node returns the current server-side record for an enrolled node.
+func (s *Server) Node(nodeID string) (NodeRecord, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec, ok := s.nodes[nodeID]
+	if !ok {
+		return NodeRecord{}, false
+	}
+	return rec, true
+}
 
 func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("/api/v1/nodes/enroll", s.handleEnroll)
@@ -141,9 +203,12 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		NodeID    string `json:"node_id"`
-		Mode      string `json:"mode"`
-		EnrollKey string `json:"enroll_key"`
+		NodeID       string                          `json:"node_id"`
+		Mode         string                          `json:"mode"`
+		KLIQVersion  string                          `json:"kliq_version,omitempty"`
+		Inventory    contracts.ComponentInventory    `json:"inventory,omitempty"`
+		ConfigReport contracts.KLIQConfigAssetReport `json:"config_report,omitempty"`
+		EnrollKey    string                          `json:"enroll_key"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
@@ -174,6 +239,16 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 	}
 	s.sessions[sessionToken] = session
 	s.nodeSessions[req.NodeID] = sessionToken
+	now := time.Now().UTC()
+	s.nodes[req.NodeID] = NodeRecord{
+		NodeID:       req.NodeID,
+		Mode:         req.Mode,
+		KLIQVersion:  req.KLIQVersion,
+		Inventory:    req.Inventory,
+		ConfigReport: req.ConfigReport,
+		EnrolledAt:   now,
+		LastSeenAt:   now,
+	}
 	s.mu.Unlock()
 
 	s.logger.Printf("[forge-api] enroll node_id=%s mode=%s", req.NodeID, req.Mode)
@@ -183,7 +258,7 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		"node_id":       req.NodeID,
 		"status":        "approved",
 		"session_token": sessionToken,
-		"enrolled_at":   time.Now().UTC().Format(time.RFC3339),
+		"enrolled_at":   now.Format(time.RFC3339),
 		"expires_at":    session.ExpiresAt.Format(time.RFC3339),
 	})
 }
@@ -208,6 +283,8 @@ func (s *Server) handleNodeRoutes(w http.ResponseWriter, r *http.Request) {
 	switch resource {
 	case "heartbeat":
 		s.handleHeartbeat(w, r, nodeID)
+	case "inventory":
+		s.handleInventory(w, r, nodeID)
 	case "policy-pack":
 		s.handleGetPolicyPack(w, r, nodeID)
 	case "policy-pack/status":
@@ -220,10 +297,22 @@ func (s *Server) handleNodeRoutes(w http.ResponseWriter, r *http.Request) {
 		s.handleBundleAck(w, r, nodeID)
 	case "receipts":
 		s.handleReceipts(w, r, nodeID)
+	case "risk-assessments":
+		s.handleRiskAssessments(w, r, nodeID)
 	case "findings":
 		s.handleFindings(w, r, nodeID)
 	case "baseline-proposals":
 		s.handleBaselineProposals(w, r, nodeID)
+	case "graph-proposals":
+		s.handleGraphProposals(w, r, nodeID)
+	case "health-reports":
+		s.handleHealthReports(w, r, nodeID)
+	case "decision-summaries":
+		s.handleDecisionSummaries(w, r, nodeID)
+	case "adapter-status":
+		s.handleAdapterStatus(w, r, nodeID)
+	case "failover-status":
+		s.handleFailoverStatus(w, r, nodeID)
 	default:
 		http.NotFound(w, r)
 	}
@@ -239,6 +328,12 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request, nodeID 
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
+	s.mu.Lock()
+	if rec, ok := s.nodes[nodeID]; ok {
+		rec.LastSeenAt = time.Now().UTC()
+		s.nodes[nodeID] = rec
+	}
+	s.mu.Unlock()
 	s.logger.Printf("[forge-api] heartbeat node=%s pack=%v drift=%v",
 		nodeID, heartbeat["pack_name"], heartbeat["drift_detected"])
 	w.Header().Set("Content-Type", "application/json")
@@ -247,6 +342,31 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request, nodeID 
 		"pack_updated": false,
 		"node_status":  "approved",
 	})
+}
+
+func (s *Server) handleInventory(w http.ResponseWriter, r *http.Request, nodeID string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var inv contracts.ComponentInventory
+	if err := json.NewDecoder(r.Body).Decode(&inv); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	s.mu.Lock()
+	rec := s.nodes[nodeID]
+	rec.NodeID = nodeID
+	rec.Inventory = inv
+	if rec.EnrolledAt.IsZero() {
+		rec.EnrolledAt = time.Now().UTC()
+	}
+	rec.LastSeenAt = time.Now().UTC()
+	s.nodes[nodeID] = rec
+	s.mu.Unlock()
+	s.logger.Printf("[forge-api] inventory node=%s capabilities=%d unavailable=%d",
+		nodeID, len(inv.EffectiveCapabilities), len(inv.UnavailableCapabilities))
+	w.WriteHeader(http.StatusOK)
 }
 
 func (s *Server) handleGetPolicyPack(w http.ResponseWriter, r *http.Request, nodeID string) {
@@ -279,11 +399,22 @@ func (s *Server) handleGetBundle(w http.ResponseWriter, r *http.Request, nodeID 
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if s.bundleProvider == nil {
+	if s.bundleProvider == nil && s.nodeProvider == nil {
 		http.Error(w, "no bundle provider configured", http.StatusServiceUnavailable)
 		return
 	}
-	data, err := s.bundleProvider(r.Context(), nodeID)
+	var data []byte
+	var err error
+	if s.nodeProvider != nil {
+		node, ok := s.Node(nodeID)
+		if !ok {
+			http.Error(w, "node is not enrolled", http.StatusNotFound)
+			return
+		}
+		data, err = s.nodeProvider(r.Context(), node)
+	} else {
+		data, err = s.bundleProvider(r.Context(), nodeID)
+	}
 	if err != nil {
 		s.logger.Printf("[forge-api] bundle error node=%s: %v", nodeID, err)
 		http.Error(w, "bundle generation failed", http.StatusInternalServerError)
@@ -303,13 +434,43 @@ func (s *Server) handleRuntimeBundleStatus(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	var status map[string]any
-	if err := json.NewDecoder(r.Body).Decode(&status); err != nil {
+	var envelope struct {
+		NodeID           string `json:"node_id"`
+		BundleGeneration int    `json:"bundle_generation"`
+		Applied          bool   `json:"applied"`
+		DriftDetected    bool   `json:"drift_detected"`
+		StatusJSON       string `json:"status_json"`
+		ErrorDetail      string `json:"error_detail,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&envelope); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
+	status := contracts.RuntimeStatus{
+		NodeID:           firstNonEmpty(envelope.NodeID, nodeID),
+		BundleGeneration: envelope.BundleGeneration,
+		Applied:          envelope.Applied,
+		DriftDetected:    envelope.DriftDetected,
+		ErrorDetail:      envelope.ErrorDetail,
+		ReportedAt:       time.Now().UTC(),
+	}
+	if strings.TrimSpace(envelope.StatusJSON) != "" {
+		var detailed contracts.RuntimeStatus
+		if err := json.Unmarshal([]byte(envelope.StatusJSON), &detailed); err == nil {
+			status = detailed
+			if status.NodeID == "" {
+				status.NodeID = nodeID
+			}
+			if status.ReportedAt.IsZero() {
+				status.ReportedAt = time.Now().UTC()
+			}
+		}
+	}
+	s.mu.Lock()
+	s.runtimeStatuses[nodeID] = append(s.runtimeStatuses[nodeID], status)
+	s.mu.Unlock()
 	s.logger.Printf("[forge-api] runtime-bundle-status node=%s generation=%v applied=%v drift=%v",
-		nodeID, status["bundle_generation"], status["applied"], status["drift_detected"])
+		nodeID, status.BundleGeneration, status.Applied, status.DriftDetected)
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -319,13 +480,22 @@ func (s *Server) handleBundleAck(w http.ResponseWriter, r *http.Request, nodeID 
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	var ack map[string]any
+	var ack contracts.RuntimeBundleAck
 	if err := json.NewDecoder(r.Body).Decode(&ack); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
+	if ack.NodeID == "" {
+		ack.NodeID = nodeID
+	}
+	if ack.ReportedAt.IsZero() {
+		ack.ReportedAt = time.Now().UTC()
+	}
+	s.mu.Lock()
+	s.bundleAcks[nodeID] = append(s.bundleAcks[nodeID], ack)
+	s.mu.Unlock()
 	s.logger.Printf("[forge-api] bundle-ack node=%s status=%v generation=%v",
-		nodeID, ack["status"], ack["generation"])
+		nodeID, ack.Applied, ack.BundleGeneration)
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -347,12 +517,28 @@ func (s *Server) handleReceipts(w http.ResponseWriter, r *http.Request, nodeID s
 	accepted := make([]string, 0, len(body.Receipts))
 	s.mu.Lock()
 	for _, raw := range body.Receipts {
-		s.receipts[nodeID] = append(s.receipts[nodeID], raw)
-		var r struct {
-			ID string `json:"id"`
+		var receipt contracts.EnforcementReceipt
+		if err := json.Unmarshal(raw, &receipt); err == nil {
+			if receipt.NodeID == "" {
+				receipt.NodeID = nodeID
+			}
+			s.receipts[nodeID] = append(s.receipts[nodeID], receipt)
 		}
-		if err := json.Unmarshal(raw, &r); err == nil && r.ID != "" {
-			accepted = append(accepted, r.ID)
+		var legacy struct {
+			ID       string `json:"id"`
+			Metadata struct {
+				ID string `json:"id"`
+			} `json:"metadata"`
+		}
+		if err := json.Unmarshal(raw, &legacy); err == nil {
+			switch {
+			case legacy.Metadata.ID != "":
+				accepted = append(accepted, legacy.Metadata.ID)
+			case legacy.ID != "":
+				accepted = append(accepted, legacy.ID)
+			case receipt.Metadata.ID != "":
+				accepted = append(accepted, receipt.Metadata.ID)
+			}
 		}
 	}
 	s.mu.Unlock()
@@ -363,16 +549,38 @@ func (s *Server) handleReceipts(w http.ResponseWriter, r *http.Request, nodeID s
 	_ = json.NewEncoder(w).Encode(map[string]any{"accepted": accepted})
 }
 
+func (s *Server) handleRiskAssessments(w http.ResponseWriter, r *http.Request, nodeID string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	assessments, err := decodeJSONList[contracts.LocalRiskAssessment](r.Body, "risk_assessments")
+	if err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	s.mu.Lock()
+	s.riskAssessments[nodeID] = append(s.riskAssessments[nodeID], assessments...)
+	s.mu.Unlock()
+	s.logger.Printf("[forge-api] risk-assessments node=%s count=%d", nodeID, len(assessments))
+	w.WriteHeader(http.StatusOK)
+}
+
 // handleFindings accepts RuntimeFindings from KLIQ.
 func (s *Server) handleFindings(w http.ResponseWriter, r *http.Request, nodeID string) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	var findings []json.RawMessage
-	if err := json.NewDecoder(r.Body).Decode(&findings); err != nil {
+	findings, err := decodeJSONList[contracts.RuntimeFinding](r.Body, "findings")
+	if err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
+	}
+	for i := range findings {
+		if findings[i].NodeID == "" {
+			findings[i].NodeID = nodeID
+		}
 	}
 	s.mu.Lock()
 	s.findings[nodeID] = append(s.findings[nodeID], findings...)
@@ -387,6 +595,20 @@ func (s *Server) handleBaselineProposals(w http.ResponseWriter, r *http.Request,
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	var proposal contracts.BaselineProposal
+	if err := decodeJSONOrYAML(r, &proposal); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	if proposal.Metadata.NodeID == "" {
+		proposal.Metadata.NodeID = nodeID
+	}
+	if proposal.Metadata.GeneratedAt.IsZero() {
+		proposal.Metadata.GeneratedAt = time.Now().UTC()
+	}
+	s.mu.Lock()
+	s.baselineProposals[nodeID] = append(s.baselineProposals[nodeID], proposal)
+	s.mu.Unlock()
 	body, _ := json.Marshal(map[string]any{"id": "proposal-" + nodeID + "-" + time.Now().Format("20060102T150405Z")})
 	s.logger.Printf("[forge-api] baseline-proposal node=%s", nodeID)
 	w.Header().Set("Content-Type", "application/json")
@@ -394,13 +616,190 @@ func (s *Server) handleBaselineProposals(w http.ResponseWriter, r *http.Request,
 	_, _ = w.Write(body)
 }
 
+func (s *Server) handleGraphProposals(w http.ResponseWriter, r *http.Request, nodeID string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var proposal contracts.GraphProposal
+	if err := decodeJSONOrYAML(r, &proposal); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	if proposal.Metadata.NodeID == "" {
+		proposal.Metadata.NodeID = nodeID
+	}
+	if proposal.Metadata.GeneratedAt.IsZero() {
+		proposal.Metadata.GeneratedAt = time.Now().UTC()
+	}
+	s.mu.Lock()
+	s.graphProposals[nodeID] = append(s.graphProposals[nodeID], proposal)
+	s.mu.Unlock()
+	body, _ := json.Marshal(map[string]any{"id": "graph-proposal-" + nodeID + "-" + time.Now().Format("20060102T150405Z")})
+	s.logger.Printf("[forge-api] graph-proposal node=%s edges=%d", nodeID, len(proposal.Spec.Edges))
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	_, _ = w.Write(body)
+}
+
+func (s *Server) handleHealthReports(w http.ResponseWriter, r *http.Request, nodeID string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	reports, err := decodeJSONList[contracts.HealthReport](r.Body, "health_reports")
+	if err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	for i := range reports {
+		if reports[i].NodeID == "" {
+			reports[i].NodeID = nodeID
+		}
+		if reports[i].ReportedAt.IsZero() {
+			reports[i].ReportedAt = time.Now().UTC()
+		}
+	}
+	s.mu.Lock()
+	s.healthReports[nodeID] = append(s.healthReports[nodeID], reports...)
+	s.mu.Unlock()
+	s.logger.Printf("[forge-api] health-reports node=%s count=%d", nodeID, len(reports))
+	w.WriteHeader(http.StatusOK)
+}
+
+func (s *Server) handleDecisionSummaries(w http.ResponseWriter, r *http.Request, nodeID string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	summaries, err := decodeJSONList[contracts.RuntimeDecisionSummary](r.Body, "decision_summaries")
+	if err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	for i := range summaries {
+		if summaries[i].NodeID == "" {
+			summaries[i].NodeID = nodeID
+		}
+		if summaries[i].ReportedAt.IsZero() {
+			summaries[i].ReportedAt = time.Now().UTC()
+		}
+	}
+	s.mu.Lock()
+	s.decisionSummaries[nodeID] = append(s.decisionSummaries[nodeID], summaries...)
+	s.mu.Unlock()
+	s.logger.Printf("[forge-api] decision-summaries node=%s count=%d", nodeID, len(summaries))
+	w.WriteHeader(http.StatusOK)
+}
+
+func (s *Server) handleAdapterStatus(w http.ResponseWriter, r *http.Request, nodeID string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	statuses, err := decodeJSONList[contracts.AdapterStatus](r.Body, "adapter_status")
+	if err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	for i := range statuses {
+		if statuses[i].NodeID == "" {
+			statuses[i].NodeID = nodeID
+		}
+		if statuses[i].ReportedAt.IsZero() {
+			statuses[i].ReportedAt = time.Now().UTC()
+		}
+	}
+	s.mu.Lock()
+	s.adapterStatuses[nodeID] = append(s.adapterStatuses[nodeID], statuses...)
+	s.mu.Unlock()
+	s.logger.Printf("[forge-api] adapter-status node=%s count=%d", nodeID, len(statuses))
+	w.WriteHeader(http.StatusOK)
+}
+
+func (s *Server) handleFailoverStatus(w http.ResponseWriter, r *http.Request, nodeID string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	statuses, err := decodeJSONList[contracts.FailoverStatus](r.Body, "failover_status")
+	if err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	for i := range statuses {
+		if statuses[i].NodeID == "" {
+			statuses[i].NodeID = nodeID
+		}
+		if statuses[i].ReportedAt.IsZero() {
+			statuses[i].ReportedAt = time.Now().UTC()
+		}
+	}
+	s.mu.Lock()
+	s.failoverStatuses[nodeID] = append(s.failoverStatuses[nodeID], statuses...)
+	s.mu.Unlock()
+	s.logger.Printf("[forge-api] failover-status node=%s count=%d", nodeID, len(statuses))
+	w.WriteHeader(http.StatusOK)
+}
+
 // Receipts returns all receipts stored for a node (for testing/inspection).
-func (s *Server) Receipts(nodeID string) []json.RawMessage {
+func (s *Server) Receipts(nodeID string) []contracts.EnforcementReceipt {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := make([]json.RawMessage, len(s.receipts[nodeID]))
+	out := make([]contracts.EnforcementReceipt, len(s.receipts[nodeID]))
 	copy(out, s.receipts[nodeID])
 	return out
+}
+
+func decodeJSONOrYAML(r *http.Request, out any) error {
+	raw, err := io.ReadAll(r.Body)
+	if err != nil {
+		return err
+	}
+	if strings.Contains(r.Header.Get("Content-Type"), "yaml") {
+		return yaml.Unmarshal(raw, out)
+	}
+	if err := json.Unmarshal(raw, out); err == nil {
+		return nil
+	}
+	return yaml.Unmarshal(raw, out)
+}
+
+func decodeJSONList[T any](body io.Reader, wrapperKey string) ([]T, error) {
+	raw, err := io.ReadAll(body)
+	if err != nil {
+		return nil, err
+	}
+	var list []T
+	if err := json.Unmarshal(raw, &list); err == nil {
+		return list, nil
+	}
+	var wrapped map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &wrapped); err == nil {
+		if wrappedRaw := wrapped[wrapperKey]; len(wrappedRaw) > 0 {
+			var single T
+			if err := json.Unmarshal(wrappedRaw, &list); err == nil {
+				return list, nil
+			}
+			if err := json.Unmarshal(wrappedRaw, &single); err == nil {
+				return []T{single}, nil
+			}
+		}
+	}
+	var single T
+	if err := json.Unmarshal(raw, &single); err == nil {
+		return []T{single}, nil
+	}
+	return nil, fmt.Errorf("payload must be %s object or list", wrapperKey)
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func (s *Server) validEnrollToken(r *http.Request, nodeID, bodyToken string) bool {

@@ -1,0 +1,75 @@
+# Block-based Natural policy intent for one logical policy that can be placed
+# on different PDP/PEP targets. Forge compiles the canonical documents once and
+# selects the deployable pack per enrolled node capability set.
+
+intent "multi-pdp-pep-admin-access"
+
+protect application_group "admin-apps" in "production" as "privileged administration surface"
+
+compose:
+  access "admin-apps-access"
+  requirements "admin-apps-context"
+  detection "admin-apps-runtime-detections"
+  response "admin-apps-runtime-responses"
+  alert_route "security-ops"
+  guardrail "protect-breakglass-admins"
+  capabilities "admin-apps-placement-requirements"
+
+access "admin-apps-access":
+  default deny access to application_group "admin-apps"
+  allow group "company-admins" to access application_group "admin-apps"
+
+requirements "admin-apps-context":
+  require "session.authentication.strength" in ["mfa", "phishing_resistant_mfa"]
+  require "subject.risk.level" eq "low"
+  require "device.posture.status" eq "healthy"
+  require "resource.environment" eq "production"
+
+detection "admin-apps-runtime-detections":
+  detect "admin-risk-medium":
+    when risk equals medium
+
+  detect "admin-risk-high":
+    when risk in ["high", "critical"]
+
+  detect "unknown-source-deny-burst":
+    when denied access to application_group "admin-apps" by unknown source exceeds 20 within 15m
+
+  detect "sustained-admin-pressure":
+    when rate_limit drops to application_group "admin-apps" by unknown source sustained for 5m
+
+response "admin-apps-runtime-responses":
+  on "admin-risk-medium" then alert route "security-ops" severity "medium" dedupe 15m
+  on "admin-risk-medium" then rate_limit source for 15m
+  on "admin-risk-high" then deny source for 5m
+  on "sustained-admin-pressure" then temporary_block source for 10m
+    require previous action "enforce.traffic.rate_limit" active
+    allow local enforcement state evidence
+    require enforcement target excludes group "breakglass-admins"
+
+alert_route "security-ops":
+  notify group "security-ops"
+  via ["log", "email"]
+  dedupe by ["tenant.id", "resource.id", "detection.id", "source.identity_or_ip"]
+  create case false
+  require acknowledgement within 30m
+  escalate if unacknowledged to group "security-oncall"
+
+guardrail "protect-breakglass-admins":
+  never auto_block group "breakglass-admins"
+  never quarantine group "breakglass-admins"
+  never disable identity group "breakglass-admins"
+
+capabilities "admin-apps-placement-requirements":
+  require identity_based_access
+  require context "session.authentication.strength"
+  require context "subject.risk.level"
+  require context "device.posture.status"
+  require context "resource.environment"
+  require windowed_detection
+  require traffic_rate_limit
+  require temporary_traffic_block
+
+gap_handling:
+  fail on missing_context
+  require_approval on identity_to_ip downgrade

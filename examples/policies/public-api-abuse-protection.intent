@@ -1,0 +1,68 @@
+# Block-based Natural policy intent for public API abuse protection.
+# Common use case: an internet-facing API remains reachable, but suspicious
+# sources are rate-limited or temporarily blocked with guardrails.
+
+intent "public-api-abuse-protection"
+
+protect api "public-api" in "production" as "internet-facing customer API"
+
+compose:
+  access "public-api-access"
+  requirements "public-api-context"
+  detection "public-api-runtime-detections"
+  response "public-api-runtime-responses"
+  alert_route "security-ops"
+  guardrail "protect-customer-success"
+  capabilities "public-api-runtime-capabilities"
+
+access "public-api-access":
+  allow all
+
+requirements "public-api-context":
+  require "resource.exposure" eq "internet"
+  require "resource.environment" eq "production"
+  require "resource.criticality" in ["high", "critical"]
+
+detection "public-api-runtime-detections":
+  detect "source-pps-high":
+    when signal "source.pps_high" score gte 0.8
+
+  detect "source-scan-suspected":
+    when signal "source.scan_suspected" score gte 0.8
+
+  detect "unknown-source-deny-burst":
+    when denied access to api "public-api" by unknown source exceeds 50 within 15m
+
+  detect "sustained-api-pressure":
+    when rate_limit drops to api "public-api" by unknown source sustained for 5m
+
+response "public-api-runtime-responses":
+  on "source-pps-high" then alert route "security-ops" severity "medium" dedupe 15m
+  on "source-scan-suspected" then rate_limit source for 15m
+  on "sustained-api-pressure" then temporary_block source for 10m
+    require previous action "enforce.traffic.rate_limit" active
+    allow local enforcement state evidence
+    require enforcement target excludes group "customer-success"
+
+alert_route "security-ops":
+  notify group "security-ops"
+  via ["log", "email"]
+  dedupe by ["tenant.id", "resource.id", "detection.id", "source.identity_or_ip"]
+  create case false
+
+guardrail "protect-customer-success":
+  never auto_block group "customer-success"
+  never quarantine group "customer-success"
+  never disable identity group "customer-success"
+
+capabilities "public-api-runtime-capabilities":
+  require context "resource.exposure"
+  require context "resource.environment"
+  require context "resource.criticality"
+  require windowed_detection
+  require traffic_rate_limit
+  require temporary_traffic_block
+
+gap_handling:
+  fail on missing_context
+  require_approval on identity_to_ip downgrade

@@ -4,9 +4,12 @@
 package risk
 
 import (
-	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"math"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/kernloom/kernloom-forge/pkg/core/context"
@@ -54,6 +57,7 @@ func Evaluate(
 	}
 
 	indicatorIndex := buildIndicatorIndex(indicators)
+	scope := assessmentScope(snapshot, indicators)
 
 	// Domain accumulators: map[domain] → accumulated effective value
 	domainScores := make(map[string]float64)
@@ -99,6 +103,7 @@ func Evaluate(
 			Spec: ContributionSpec{
 				ModelRef:         ModelRef{ID: model.Metadata.Name, Version: model.Metadata.Version},
 				RuleID:           inp.ID,
+				Scope:            scope,
 				ContextKey:       inp.Key,
 				BaseValue:        inp.BaseContribution,
 				Direction:        direction(inp.BaseContribution),
@@ -169,16 +174,18 @@ func Evaluate(
 			reasonCodes = append(reasonCodes, fmt.Sprintf("RULE_%s", c.Spec.RuleID))
 		}
 	}
+	finalLevel := levelFromModelThresholds(finalScore, model)
 
 	assessment := &RiskAssessment{
 		APIVersion: "kernloom.io/risk/v1alpha1",
 		Kind:       "RiskAssessment",
 		Metadata: AssessmentMetadata{
-			ID: generateID(),
+			ID: stableAssessmentID(model, snapshot, scope, now, finalScore, finalLevel, contributions, missingInputs),
 		},
 		Spec: AssessmentSpec{
+			Scope:         scope,
 			Score:         finalScore,
-			Level:         levelFromModelThresholds(finalScore, model),
+			Level:         finalLevel,
 			Confidence:    assessmentConfidence,
 			Completeness:  completeness,
 			Model:         ModelRef{ID: model.Metadata.Name, Version: model.Metadata.Version, Owner: model.Metadata.Owner},
@@ -408,11 +415,60 @@ func safeDivide(num, denom float64) float64 {
 	return num / denom
 }
 
-// generateID returns a random UUIDv4 string.
-func generateID() string {
-	var b [16]byte
-	_, _ = rand.Read(b[:])
-	b[6] = (b[6] & 0x0f) | 0x40
-	b[8] = (b[8] & 0x3f) | 0x80
-	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:])
+func assessmentScope(snapshot *context.ContextSnapshot, indicators []RiskIndicator) ScopeRef {
+	for _, fact := range snapshot.Facts {
+		if fact.EntityRef.Type != "" || fact.EntityRef.Ref != "" {
+			return ScopeRef{Type: fact.EntityRef.Type, Ref: fact.EntityRef.Ref}
+		}
+	}
+	for _, indicator := range indicators {
+		if indicator.Spec.Scope.Type != "" || indicator.Spec.Scope.Ref != "" {
+			return indicator.Spec.Scope
+		}
+	}
+	return ScopeRef{Type: "unknown", Ref: "unknown"}
+}
+
+func stableAssessmentID(
+	model *RiskModel,
+	snapshot *context.ContextSnapshot,
+	scope ScopeRef,
+	now time.Time,
+	score int,
+	level RiskLevel,
+	contributions []RiskContribution,
+	missingInputs []string,
+) string {
+	var b strings.Builder
+	b.WriteString(model.Metadata.Name)
+	b.WriteString("|")
+	b.WriteString(model.Metadata.Version)
+	b.WriteString("|")
+	b.WriteString(snapshot.ID)
+	b.WriteString("|")
+	b.WriteString(scope.Type)
+	b.WriteString("|")
+	b.WriteString(scope.Ref)
+	b.WriteString("|")
+	b.WriteString(now.UTC().Format(time.RFC3339Nano))
+	b.WriteString("|")
+	b.WriteString(fmt.Sprintf("%d|%s", score, level))
+	for _, c := range contributions {
+		b.WriteString("|")
+		b.WriteString(c.Spec.RuleID)
+		b.WriteString(":")
+		b.WriteString(c.Spec.ContextKey)
+		b.WriteString(":")
+		b.WriteString(c.Spec.IndicatorRef)
+		b.WriteString(":")
+		b.WriteString(fmt.Sprintf("%.6f", c.Spec.EffectiveValue))
+	}
+	missing := append([]string(nil), missingInputs...)
+	sort.Strings(missing)
+	for _, input := range missing {
+		b.WriteString("|missing:")
+		b.WriteString(input)
+	}
+	sum := sha256.Sum256([]byte(b.String()))
+	return "risk-" + hex.EncodeToString(sum[:])[:16]
 }

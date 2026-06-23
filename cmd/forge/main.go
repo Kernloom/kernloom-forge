@@ -13,6 +13,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -33,8 +34,8 @@ import (
 	"github.com/kernloom/kernloom-forge/pkg/core/adapter"
 	"github.com/kernloom/kernloom-forge/pkg/core/intent"
 	"github.com/kernloom/kernloom-forge/pkg/core/mapping"
+	"github.com/kernloom/kernloom-forge/pkg/core/plan"
 	"github.com/kernloom/kernloom-forge/pkg/core/profile"
-	"github.com/kernloom/kernloom-forge/pkg/core/requirement"
 )
 
 func main() {
@@ -49,6 +50,8 @@ func main() {
 	root.AddCommand(exportRuntimePolicyCmd())
 	root.AddCommand(buildRuntimeBundleCmd())
 	root.AddCommand(configPDPCmd())
+	root.AddCommand(contextCmd())
+	root.AddCommand(riskCmd())
 	root.AddCommand(reportCmd())
 	root.AddCommand(keygenCmd())
 	root.AddCommand(enrollTokenCmd())
@@ -63,7 +66,7 @@ func main() {
 
 // serveCmd: forge serve --addr :8443
 func serveCmd() *cobra.Command {
-	var addr, adaptersDir, profilesDir, policyFile, target, signingKey, runtimeMode, failover, enrollTokenStore string
+	var addr, adaptersDir, profilesDir, policyFile, intentFile, intentBaseDir, assignmentFile, target, signingKey, runtimeMode, failover, enrollTokenStore string
 	var enrollTokens []string
 	var guardrailFiles []string
 	var detectionFiles []string
@@ -79,7 +82,6 @@ func serveCmd() *cobra.Command {
     --policy examples/policies/investor-apps-access.yaml \
     --adapters examples/adapters/ \
     --profiles examples/profiles/ \
-    --target openziti-production \
     --signing-key /tmp/forge-runtime.key \
     --enroll-token-store /var/lib/kernloom/forge-enroll-tokens.yaml`,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -97,40 +99,75 @@ func serveCmd() *cobra.Command {
 				tokenValidator = store.Consume
 				srvLog.Printf("using enrollment token store %s", enrollTokenStore)
 			}
-			guardrails, err := loadRuntimeGuardrails(guardrailFiles)
-			if err != nil {
-				return err
-			}
-			detectionRules, err := loadRuntimeDetectionRules(detectionFiles)
-			if err != nil {
-				return err
-			}
-			responseRules, err := loadRuntimeResponseRules(responseFiles)
-			if err != nil {
-				return err
-			}
-			alertRoutes, err := loadRuntimeAlertRoutes(alertRouteFiles)
-			if err != nil {
-				return err
-			}
 
 			var provider api.BundleProvider
-			if adaptersDir != "" && profilesDir != "" && policyFile != "" && target != "" {
+			var nodeProvider api.NodeAwareBundleProvider
+			if assignmentFile != "" {
+				if policyFile != "" || intentFile != "" || len(guardrailFiles) > 0 || len(detectionFiles) > 0 || len(responseFiles) > 0 || len(alertRouteFiles) > 0 {
+					return fmt.Errorf("--assignments cannot be mixed with --policy, --intent, --guardrail, --detection, --response or --alert-route")
+				}
+				if adaptersDir == "" || profilesDir == "" {
+					return fmt.Errorf("--assignments requires --adapters and --profiles")
+				}
+				if signingKey == "" {
+					return fmt.Errorf("--assignments requires --signing-key")
+				}
+				assignments, err := loadAssignments(assignmentFile)
+				if err != nil {
+					return err
+				}
+				assignmentBaseDir := filepath.Dir(assignmentFile)
 				priv, err := signing.LoadPrivateKey(signingKey)
 				if err != nil {
 					return err
 				}
-				provider = func(ctx context.Context, nodeID string) ([]byte, error) {
-					_, plans, profiles, err := compilePlans(policyFile, adaptersDir, profilesDir)
+				nodeProvider = func(ctx context.Context, node api.NodeRecord) ([]byte, error) {
+					assignment, err := selectAssignment(assignments, node)
+					if err != nil {
+						if errors.Is(err, errNoPolicyAssignment) {
+							srvLog.Printf("bundle request node=%s no assignment matched", node.NodeID)
+							return nil, nil
+						}
+						return nil, err
+					}
+					assignmentIntent := resolveAssignmentIntent(assignmentBaseDir, assignment)
+					comp, plans, profiles, err := compilePlansFromInput("", assignmentIntent, "", adaptersDir, profilesDir, nil, nil, nil, nil)
 					if err != nil {
 						return nil, err
 					}
-					ep, prof, err := selectTarget(plans, profiles, target)
-					if err != nil {
-						return nil, err
+					selectedTarget := intentTargetOverride(comp, assignment.Target)
+					var ep *plan.EnforcementPlan
+					var prof *profile.TargetIntegrationProfile
+					if selectedTarget == "" {
+						placement, err := selectAutoPlacement(node, plans, profiles, bundler.RuntimePolicyConfig{
+							NodeID:            node.NodeID,
+							Generation:        generation,
+							IssuedAt:          time.Now().UTC(),
+							DefaultTTL:        ttl,
+							Guardrails:        comp.Guardrails,
+							DetectionRules:    comp.DetectionRules,
+							ResponseRules:     comp.ResponseRules,
+							AlertRoutes:       comp.AlertRoutes,
+							AutonomyLifecycle: comp.AutonomyLifecycle,
+						})
+						if err != nil {
+							if errors.Is(err, errNoPolicyAssignment) {
+								srvLog.Printf("bundle request node=%s assignment=%s no auto-placement matched: %v", node.NodeID, assignment.ID, err)
+								return nil, nil
+							}
+							return nil, err
+						}
+						ep, prof = placement.Plan, placement.Profile
+						selectedTarget = ep.Metadata.Target
+					} else {
+						var err error
+						ep, prof, err = selectTarget(plans, profiles, selectedTarget)
+						if err != nil {
+							return nil, err
+						}
 					}
 					b, err := bundler.Build(ep, prof, bundler.BundleConfig{
-						NodeID:            nodeID,
+						NodeID:            node.NodeID,
 						Generation:        generation,
 						IssuedAt:          time.Now().UTC(),
 						ValidFor:          validFor,
@@ -138,23 +175,90 @@ func serveCmd() *cobra.Command {
 						RuntimePDPMode:    runtimeMode,
 						FailoverBehavior:  failover,
 						DefaultTTL:        ttl,
-						Guardrails:        guardrails,
-						DetectionRules:    detectionRules,
-						ResponseRules:     responseRules,
-						AlertRoutes:       alertRoutes,
+						Guardrails:        comp.Guardrails,
+						DetectionRules:    comp.DetectionRules,
+						ResponseRules:     comp.ResponseRules,
+						AlertRoutes:       comp.AlertRoutes,
+						AutonomyLifecycle: comp.AutonomyLifecycle,
 					}, priv)
 					if err != nil {
 						return nil, err
 					}
-					srvLog.Printf("bundle request node=%s target=%s generation=%d", nodeID, target, generation)
+					srvLog.Printf("bundle request node=%s assignment=%s intent=%s target=%s generation=%d", node.NodeID, assignment.ID, assignment.Intent, selectedTarget, generation)
+					return yaml.Marshal(b)
+				}
+			} else if adaptersDir != "" && profilesDir != "" && (policyFile != "" || intentFile != "") {
+				if signingKey == "" {
+					return fmt.Errorf("--policy/--intent bundle serving requires --signing-key")
+				}
+				priv, err := signing.LoadPrivateKey(signingKey)
+				if err != nil {
+					return err
+				}
+				nodeProvider = func(ctx context.Context, node api.NodeRecord) ([]byte, error) {
+					comp, plans, profiles, err := compilePlansFromInput(policyFile, intentFile, intentBaseDir, adaptersDir, profilesDir, guardrailFiles, detectionFiles, responseFiles, alertRouteFiles)
+					if err != nil {
+						return nil, err
+					}
+					selectedTarget := intentTargetOverride(comp, target)
+					var ep *plan.EnforcementPlan
+					var prof *profile.TargetIntegrationProfile
+					if selectedTarget == "" {
+						placement, err := selectAutoPlacement(node, plans, profiles, bundler.RuntimePolicyConfig{
+							NodeID:            node.NodeID,
+							Generation:        generation,
+							IssuedAt:          time.Now().UTC(),
+							DefaultTTL:        ttl,
+							Guardrails:        comp.Guardrails,
+							DetectionRules:    comp.DetectionRules,
+							ResponseRules:     comp.ResponseRules,
+							AlertRoutes:       comp.AlertRoutes,
+							AutonomyLifecycle: comp.AutonomyLifecycle,
+						})
+						if err != nil {
+							if errors.Is(err, errNoPolicyAssignment) {
+								srvLog.Printf("bundle request node=%s no auto-placement matched: %v", node.NodeID, err)
+								return nil, nil
+							}
+							return nil, err
+						}
+						ep, prof = placement.Plan, placement.Profile
+						selectedTarget = ep.Metadata.Target
+					} else {
+						var err error
+						ep, prof, err = selectTarget(plans, profiles, selectedTarget)
+						if err != nil {
+							return nil, err
+						}
+					}
+					b, err := bundler.Build(ep, prof, bundler.BundleConfig{
+						NodeID:            node.NodeID,
+						Generation:        generation,
+						IssuedAt:          time.Now().UTC(),
+						ValidFor:          validFor,
+						PreferredAdapters: []string{prof.Spec.AdapterRef},
+						RuntimePDPMode:    runtimeMode,
+						FailoverBehavior:  failover,
+						DefaultTTL:        ttl,
+						Guardrails:        comp.Guardrails,
+						DetectionRules:    comp.DetectionRules,
+						ResponseRules:     comp.ResponseRules,
+						AlertRoutes:       comp.AlertRoutes,
+						AutonomyLifecycle: comp.AutonomyLifecycle,
+					}, priv)
+					if err != nil {
+						return nil, err
+					}
+					srvLog.Printf("bundle request node=%s target=%s generation=%d", node.NodeID, selectedTarget, generation)
 					return yaml.Marshal(b)
 				}
 			}
 
 			srv := api.NewServerWithOptions(provider, srvLog, api.ServerOptions{
-				EnrollTokens:         enrollTokens,
-				RequireAuth:          true,
-				EnrollTokenValidator: tokenValidator,
+				EnrollTokens:            enrollTokens,
+				RequireAuth:             true,
+				EnrollTokenValidator:    tokenValidator,
+				NodeAwareBundleProvider: nodeProvider,
 			})
 			srvLog.Printf("forge API server listening on %s", addr)
 			return http.ListenAndServe(addr, srv.Handler())
@@ -163,6 +267,9 @@ func serveCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&addr, "addr", ":8443", "listen address")
 	cmd.Flags().StringVar(&policyFile, "policy", "", "AccessPolicy YAML file (enables real bundle generation)")
+	cmd.Flags().StringVar(&intentFile, "intent", "", "PolicyIntent composition manifest YAML file (enables real bundle generation)")
+	cmd.Flags().StringVar(&intentBaseDir, "intent-base-dir", "", "base directory for relative PolicyIntent document refs (default: manifest directory)")
+	cmd.Flags().StringVar(&assignmentFile, "assignments", "", "NodePolicyAssignments YAML file for capability-based bundle resolution")
 	cmd.Flags().StringVar(&adaptersDir, "adapters", "", "adapters directory")
 	cmd.Flags().StringVar(&profilesDir, "profiles", "", "profiles directory")
 	cmd.Flags().StringVar(&target, "target", "", "TargetIntegrationProfile metadata.name for generated bundles")
@@ -233,7 +340,7 @@ func enrollTokenCreateCmd() *cobra.Command {
 //
 // --profiles <dir> contains TargetIntegrationProfile YAML files.
 func compileCmd() *cobra.Command {
-	var policyFile, adaptersDir, profilesDir, outputFmt string
+	var policyFile, intentFile, intentBaseDir, adaptersDir, profilesDir, outputFmt string
 
 	cmd := &cobra.Command{
 		Use:   "compile",
@@ -243,44 +350,10 @@ func compileCmd() *cobra.Command {
     --adapters examples/adapters/ \
     --profiles examples/profiles/`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// 1. Load and dispatch policy.
-			env, err := intent.LoadEnvelopeFromFile(policyFile)
+			_, plans, _, err := compilePlansFromInput(policyFile, intentFile, intentBaseDir, adaptersDir, profilesDir, nil, nil, nil, nil)
 			if err != nil {
-				return fmt.Errorf("policy: %w", err)
+				return err
 			}
-			if env.Kind != intent.KindAccessPolicy {
-				return fmt.Errorf("unsupported policy kind %q", env.Kind)
-			}
-			pol, err := intent.LoadAccessPolicyFromFile(policyFile)
-			if err != nil {
-				return fmt.Errorf("policy: %w", err)
-			}
-
-			// 2. Extract requirements.
-			reqs, err := requirement.Extract(pol)
-			if err != nil {
-				return fmt.Errorf("requirement extraction: %w", err)
-			}
-
-			// 3. Load profiles.
-			profiles, err := loadProfiles(profilesDir)
-			if err != nil {
-				return fmt.Errorf("profiles: %w", err)
-			}
-			if len(profiles) == 0 {
-				return fmt.Errorf("no TargetIntegrationProfiles found in %s", profilesDir)
-			}
-
-			// 4. Load adapter bundles (one per unique adapterRef).
-			bundles, err := loadBundles(adaptersDir, profiles)
-			if err != nil {
-				return fmt.Errorf("adapters: %w", err)
-			}
-
-			// 5. Compile.
-			plans := compiler.Compile(pol.Metadata.Name, reqs, profiles, bundles)
-
-			// 6. Output.
 			switch outputFmt {
 			case "summary":
 				for _, p := range plans {
@@ -302,11 +375,12 @@ func compileCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&policyFile, "policy", "", "AccessPolicy YAML file (required)")
+	cmd.Flags().StringVar(&policyFile, "policy", "", "AccessPolicy YAML file")
+	cmd.Flags().StringVar(&intentFile, "intent", "", "PolicyIntent composition manifest YAML file")
+	cmd.Flags().StringVar(&intentBaseDir, "intent-base-dir", "", "base directory for relative PolicyIntent document refs (default: manifest directory)")
 	cmd.Flags().StringVar(&adaptersDir, "adapters", "", "directory of adapter subdirectories (required)")
 	cmd.Flags().StringVar(&profilesDir, "profiles", "", "directory of TargetIntegrationProfile YAML files (required)")
 	cmd.Flags().StringVar(&outputFmt, "output", "summary", "output format: summary | yaml")
-	_ = cmd.MarkFlagRequired("policy")
 	_ = cmd.MarkFlagRequired("adapters")
 	_ = cmd.MarkFlagRequired("profiles")
 	return cmd

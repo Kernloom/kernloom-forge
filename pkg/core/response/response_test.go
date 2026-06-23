@@ -6,6 +6,8 @@ package response
 import (
 	"testing"
 	"time"
+
+	contracts "github.com/kernloom/kernloom-contracts"
 )
 
 func TestResponsePolicyRuntimeRules(t *testing.T) {
@@ -83,6 +85,37 @@ func TestDetectionPolicyRuntimeRules(t *testing.T) {
 	if got := rules[0].Window.Duration; got != 15*time.Minute {
 		t.Fatalf("window = %s", got)
 	}
+	if got := rules[0].Params["evaluator_type"]; got != "windowed" {
+		t.Fatalf("evaluator_type = %#v", got)
+	}
+	if got := rules[0].Params["missing_context"]; got != "not_match" {
+		t.Fatalf("missing_context = %#v", got)
+	}
+	groupBy, ok := rules[0].Params["group_by"].([]string)
+	if !ok || len(groupBy) != 1 || groupBy[0] != "source.identity_or_ip" {
+		t.Fatalf("group_by = %#v", rules[0].Params["group_by"])
+	}
+}
+
+func TestDetectionPolicyRejectsStatelessWindow(t *testing.T) {
+	p := DetectionPolicy{
+		APIVersion: "kernloom.io/v1",
+		Kind:       KindDetectionPolicy,
+		Metadata:   Metadata{Name: "bad-detections"},
+		Spec: DetectionSpec{
+			Evaluator: DetectionEvaluatorSpec{Type: "stateless"},
+			Rules: []DetectionRule{{
+				ID: "windowed",
+				When: DetectionWhen{
+					Type:   "access.denied_threshold",
+					Window: "15m",
+				},
+			}},
+		},
+	}
+	if err := p.Validate(); err == nil {
+		t.Fatal("expected stateless evaluator with window to fail")
+	}
 }
 
 func TestAlertRouteRuntimeRoute(t *testing.T) {
@@ -93,7 +126,7 @@ func TestAlertRouteRuntimeRoute(t *testing.T) {
 		Spec: AlertRouteSpec{
 			Audience: Audience{Type: "group", Ref: "group.kernloom-security-ops"},
 			Channels: []Channel{
-				{Type: "slack", Ref: "channel.security-ops"},
+				{Type: "log", Ref: "log.security-ops"},
 				{Type: "email", Ref: "mailinglist.security-ops"},
 			},
 			DefaultSeverity: "medium",
@@ -119,5 +152,56 @@ func TestAlertRouteRuntimeRoute(t *testing.T) {
 	}
 	if got := runtimeRoute.Deduplication.Window.Duration; got != 15*time.Minute {
 		t.Fatalf("dedupe window = %s", got)
+	}
+}
+
+func TestValidateRuntimeReferencesRequiresKnownDetectionAndRoute(t *testing.T) {
+	detections := []contracts.RuntimeDetectionRule{{
+		ID:   "admin-deny",
+		Type: "access.denied_threshold",
+	}}
+	routes := []contracts.RuntimeAlertRoute{{
+		ID:              "alert-route.security-ops",
+		DefaultSeverity: "medium",
+		Deduplication: contracts.RuntimeAlertDeduplication{
+			Enabled: true,
+			Window:  contracts.NewDuration(15 * time.Minute),
+		},
+	}}
+	snapshot := contracts.RegistrySnapshot{
+		ActionContracts: []contracts.RuntimeActionContractEntry{{
+			ID: "notify.alert.emit",
+		}},
+		Capabilities: []contracts.CapabilityEntry{{
+			ID: "notify.alert.emit",
+		}},
+	}
+
+	good := []contracts.RuntimeResponseRule{{
+		ID: "alert-admin-deny",
+		When: contracts.RuntimeResponseTrigger{
+			Detection: "admin-deny",
+		},
+		Then: []contracts.RuntimeResponseAction{{
+			ID:       "notify.alert.emit",
+			Route:    "alert-route.security-ops",
+			Severity: "medium",
+			Dedupe:   contracts.NewDuration(15 * time.Minute),
+		}},
+	}}
+	if err := ValidateRuntimeReferences(detections, good, routes, snapshot); err != nil {
+		t.Fatalf("good references should validate: %v", err)
+	}
+
+	badDetection := append([]contracts.RuntimeResponseRule(nil), good...)
+	badDetection[0].When.Detection = "missing"
+	if err := ValidateRuntimeReferences(detections, badDetection, routes, snapshot); err == nil {
+		t.Fatal("expected unknown detection to fail")
+	}
+
+	badRoute := append([]contracts.RuntimeResponseRule(nil), good...)
+	badRoute[0].Then[0].Route = "missing-route"
+	if err := ValidateRuntimeReferences(detections, badRoute, routes, snapshot); err == nil {
+		t.Fatal("expected unknown route to fail")
 	}
 }

@@ -1,0 +1,66 @@
+# Block-based Natural policy intent for a KLShield-local runtime pack.
+# Forge converts this authoring file into canonical documents plus a thin,
+# digest-pinned PolicyIntent manifest.
+
+intent "manual-edge-access"
+
+protect service "public-edge" in "production" as "public edge service"
+
+compose:
+  access "manual-edge-access"
+  requirements "manual-edge-context"
+  detection "manual-edge-runtime-detections"
+  response "manual-edge-runtime-responses"
+  alert_route "security-ops"
+  guardrail "never-autoblock-kernloom-admins"
+  capabilities "manual-edge-runtime-capabilities"
+
+access "manual-edge-access":
+  allow all
+
+requirements "manual-edge-context":
+  require "subject.risk.level" eq "low"
+  require "device.posture.status" eq "healthy"
+
+detection "manual-edge-runtime-detections":
+  detect "risk-elevated":
+    when risk at least medium
+
+  detect "risk-high":
+    when risk at least high
+
+  detect "unknown-source-deny":
+    when denied access to "public-edge" by unknown source exceeds 5 within 15m
+
+  detect "sustained-pressure":
+    when rate_limit drops to "public-edge" by unknown source sustained for 1m
+
+response "manual-edge-runtime-responses":
+  on "risk-elevated" then rate_limit source for 1m
+  on "risk-high" then alert route "security-ops" severity "high" dedupe 1m
+  on "sustained-pressure" then temporary_block source for 1m
+    require previous action "enforce.traffic.rate_limit" active
+    allow local enforcement state evidence
+    require enforcement target excludes group "kernloom-admins"
+
+alert_route "security-ops":
+  notify group "kernloom-security-ops"
+  via ["log", "email"]
+  dedupe by ["tenant.id", "resource.id", "detection.id", "source.identity_or_ip"]
+  create case false
+
+guardrail "never-autoblock-kernloom-admins":
+  never auto_block group "kernloom-admins"
+  never quarantine group "kernloom-admins"
+  never disable identity group "kernloom-admins"
+
+capabilities "manual-edge-runtime-capabilities":
+  require context "subject.risk.level"
+  require context "device.posture.status"
+  require windowed_detection
+  require traffic_rate_limit
+  require temporary_traffic_block
+
+gap_handling:
+  fail on missing_context
+  require_approval on identity_to_ip downgrade

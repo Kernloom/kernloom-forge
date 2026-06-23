@@ -71,7 +71,7 @@ type Causality struct {
 
 // Provenance records where a fact came from and how it was produced.
 type Provenance struct {
-	// SourceAdapter identifies the PIP or read adapter (e.g. "openziti-pip", "idp-pip").
+	// SourceAdapter identifies the PIP or read adapter (e.g. "posture-pip", "idp-pip").
 	SourceAdapter string `yaml:"sourceAdapter" json:"sourceAdapter"`
 
 	// SourceType describes the collection method: "pip_read", "manual", "derived".
@@ -149,22 +149,22 @@ func (f *ContextFact) IsUsable() bool {
 // VendorAssessment is a raw vendor-owned interpretation that has NOT yet been
 // normalised into a canonical ContextFact.
 //
-// The key remains vendor-namespaced (e.g. "openziti.posture_result").
+// The key remains vendor-namespaced (e.g. "posture_provider.posture_result").
 // It must never be silently treated as a canonical fact.
 // A normalization rule must explicitly define the mapping.
 //
 // Example:
 //
-//	Vendor:    "openziti"
-//	Key:       "openziti.posture_result"    ← vendor-namespaced
+//	Vendor:    "posture_provider"
+//	Key:       "posture_provider.posture_result" ← vendor-namespaced
 //	Value:     "pass"
 //	MappedTo:  "device.posture.status"      ← canonical key, after normalization
 type VendorAssessment struct {
-	// Vendor identifies the source vendor system (e.g. "openziti", "edr", "idp").
+	// Vendor identifies the source vendor system (e.g. "posture_provider", "edr", "idp").
 	Vendor string `yaml:"vendor" json:"vendor"`
 
 	// Key is the vendor-specific, namespaced key. Must start with vendor name.
-	// E.g.: "openziti.posture_result", "edr.device_risk_level".
+	// E.g.: "posture_provider.posture_result", "edr.device_risk_level".
 	Key string `yaml:"key" json:"key"`
 
 	// Value is the raw vendor value, before normalization.
@@ -210,6 +210,12 @@ type ContextSnapshot struct {
 
 	// VendorAssessments are raw vendor assessments included for audit/replay.
 	VendorAssessments []VendorAssessment `yaml:"vendorAssessments,omitempty" json:"vendorAssessments,omitempty"`
+
+	// EntityLinks record approved or candidate aliases across PIPs.
+	EntityLinks []EntityLink `yaml:"entityLinks,omitempty" json:"entityLinks,omitempty"`
+
+	// PIPHealth records source availability at snapshot time.
+	PIPHealth []PIPHealth `yaml:"pipHealth,omitempty" json:"pipHealth,omitempty"`
 }
 
 // FactsFor returns all facts in the snapshot that belong to the given entity.
@@ -236,7 +242,7 @@ func (s *ContextSnapshot) FactByKey(key string) *ContextFact {
 // PIPHealth describes the operational state of a PIP/read adapter.
 // A degraded or unavailable PIP affects the usability of facts it supplies.
 type PIPHealth struct {
-	// SourceAdapter identifies the adapter (e.g. "openziti-pip", "idp-pip").
+	// SourceAdapter identifies the adapter (e.g. "posture-pip", "idp-pip").
 	SourceAdapter string `yaml:"sourceAdapter" json:"sourceAdapter"`
 
 	// Status: "healthy", "degraded", "unavailable".
@@ -253,6 +259,17 @@ type PIPHealth struct {
 
 	// Details is a human-readable status message.
 	Details string `yaml:"details,omitempty" json:"details,omitempty"`
+}
+
+// EntityLink connects source-specific identifiers to a canonical entity.
+type EntityLink struct {
+	Subject      EntityRef   `yaml:"subject" json:"subject"`
+	Aliases      []EntityRef `yaml:"aliases,omitempty" json:"aliases,omitempty"`
+	Confidence   float64     `yaml:"confidence" json:"confidence"`
+	Approved     bool        `yaml:"approved,omitempty" json:"approved,omitempty"`
+	Source       string      `yaml:"source,omitempty" json:"source,omitempty"`
+	ObservedAt   time.Time   `yaml:"observedAt,omitempty" json:"observedAt,omitempty"`
+	EvidenceRefs []string    `yaml:"evidenceRefs,omitempty" json:"evidenceRefs,omitempty"`
 }
 
 // RequiredSignal declares a canonical context key that a policy condition needs.

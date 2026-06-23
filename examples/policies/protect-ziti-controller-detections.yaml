@@ -1,15 +1,48 @@
 apiVersion: kernloom.io/v1
 kind: DetectionPolicy
 metadata:
-  name: protect-ziti-controller-detections
+  name: protect-ziti-controller-admin-access-detections
 spec:
+  evaluator:
+    type: windowed
+    stateRequired: true
+    preferredRuntimes:
+      - kliq-local-windowed
+    allowedRuntimes:
+      - kliq-local-windowed
+      - correlate
   rules:
-    - id: denied-access-ziti-controller-exceeds-5-within-15m0s
+    - id: unknown-source-heavy-deny
       when:
         type: access.denied_threshold
+        subject:
+          selector: unknown_source
         resourceRef: ziti-controller
-        threshold: 5
-        window: 15m
+        threshold: 20
+        window: 15m0s
         scope: source
+        groupBy:
+          - source.identity_or_ip
+        missingContext: not_match
+        params:
+          selector: unknown_source
       reasonCodes:
         - denied_access_threshold_exceeded
+        - unknown_source_matched
+    - id: sustained-pressure
+      when:
+        type: source.rate_limit_drops_sustained
+        subject:
+          selector: unknown_source
+        resourceRef: ziti-controller
+        threshold: 1
+        window: 5m0s
+        scope: source
+        groupBy:
+          - source.identity_or_ip
+        missingContext: not_match
+        params:
+          selector: unknown_source
+      reasonCodes:
+        - rate_limit_drops_sustained
+        - unknown_source_matched

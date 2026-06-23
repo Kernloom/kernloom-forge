@@ -1,20 +1,52 @@
 apiVersion: kernloom.io/v1
 kind: ResponsePolicy
 metadata:
-  name: protect-ziti-controller-responses
+  name: protect-ziti-controller-admin-access-responses
 spec:
   mode: ordered
   stateRequired: true
   conflictResolution: strongest_allowed_action
   rules:
-    - id: on-denied-access-ziti-controller-exceeds-5-within-15m0s-alert-route-security-ops
+    - id: on-unknown-source-heavy-deny-enforce-traffic-rate-limit
       when:
-        detection: denied-access-ziti-controller-exceeds-5-within-15m0s
+        detection: unknown-source-heavy-deny
+        window: 0s
       then:
         action:
-          id: notify.alert.emit
-          route: alert-route.security-ops
-          severity: medium
-          dedupe: 15m
+          id: enforce.traffic.rate_limit
+          ttl: 15m0s
+          target:
+            scope: source
+          params:
+            natural_action: rate_limit
       reasonCodes:
-        - response_on_denied_access_ziti_controller_exceeds_5_within_15m0s
+        - response_on_unknown_source_heavy_deny
+    - id: on-sustained-pressure-enforce-traffic-drop
+      when:
+        detection: sustained-pressure
+        window: 0s
+      then:
+        action:
+          id: enforce.traffic.drop
+          ttl: 10m0s
+          target:
+            scope: source
+          params:
+            natural_action: temporary_block
+      require:
+        previousAction:
+          id: enforce.traffic.rate_limit
+          active: true
+          evidence:
+            - runtime_response_state
+            - local_runtime_state
+        blastRadius:
+          excludes:
+            - type: group
+              ref: kernloom-admins
+          unknownBehavior: reject_hard_action
+      reasonCodes:
+        - response_on_sustained_pressure
+        - requires_previous_action_active
+        - allows_local_runtime_state_evidence
+        - requires_blast_radius_exclusion

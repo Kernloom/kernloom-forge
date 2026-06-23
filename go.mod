@@ -3,8 +3,8 @@ module github.com/kernloom/kernloom-forge
 go 1.23
 
 require (
-	github.com/kernloom/kernloom-contracts v0.3.2
-	github.com/kernloom/kernloom-registries v0.3.2
+	github.com/kernloom/kernloom-contracts v0.4.0
+	github.com/kernloom/kernloom-registries v0.4.0
 	github.com/spf13/cobra v1.10.2
 	gopkg.in/yaml.v3 v3.0.1
 )

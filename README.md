@@ -11,7 +11,8 @@ KLIQ enforces locally via its PEP adapters (KLShield, netfilter, OpenZiti, …).
 
 `v0.3.x` focuses on the Forge-to-KLIQ runtime path:
 
-- Write or convert an `AccessPolicy`.
+- Write Natural Intent and convert it to canonical policy documents plus a
+  thin `PolicyIntent`.
 - Compile reports and enforcement plans.
 - Export a standalone `RuntimePolicyPack` for `kliq --policy-file`.
 - Build or serve a signed `RuntimeBundle` for managed KLIQ.
@@ -55,7 +56,7 @@ A policy written once compiles against multiple targets simultaneously. Each tar
 | `pkg/core/risk/` | RiskAssessment, RiskModel, deterministic Risk Engine | ✅ |
 | `pkg/core/response/` | DetectionPolicy, ResponsePolicy, AlertRoute runtime IR | MVP |
 | `pkg/core/bundle/` | Historical Forge bundle model | legacy |
-| `pkg/core/naturalintent/` | Simple natural intent parser/converter to `AccessPolicy` | MVP |
+| `pkg/core/naturalintent/` | Natural Intent parser/converter to canonical policy documents | MVP |
 | `pkg/bundler/` | Build KLIQ `kernloom-contracts` RuntimePolicyPack/RuntimeBundle + Sign/Verify (Ed25519) | ✅ |
 | `pkg/compiler/` | AccessPolicy → EnforcementPlan | ✅ |
 | `pkg/configpdp/` | Validates EnforcementPlan against `enforcementConstraints` | ✅ |
@@ -77,21 +78,35 @@ go build -o bin/forge ./cmd/forge/
 # Run tests
 go test ./...
 
-# Compile a policy against adapter profiles
+# Convert human-authored intent into canonical docs + PolicyIntent
+./bin/forge intent convert \
+  --input examples/policies/investor-apps-access.intent \
+  --output-dir /tmp/kernloom-forge/investor-apps \
+  --emit-policy-intent \
+  --owner security
+
+# Compile the generated PolicyIntent against adapter profiles
 ./bin/forge compile \
-  --policy  examples/policies/investor-apps-access.yaml \
+  --intent /tmp/kernloom-forge/investor-apps/policy-intent.yaml \
   --adapters examples/adapters/ \
   --profiles examples/profiles/
 
-# Validate a policy
-./bin/forge validate --policy examples/policies/investor-apps-access.yaml
+# Validate generated canonical documents and refs
+./bin/forge intent validate \
+  --input /tmp/kernloom-forge/investor-apps/policy-intent.yaml
+
+# Explain Natural Intent support status before export/deployment
+./bin/forge intent support \
+  --input examples/policies/investor-apps-access.intent \
+  --target openziti-production \
+  --output /tmp/kernloom-forge/investor-apps-support.yaml
 
 # Validate an adapter capability manifest
 ./bin/forge validate-adapter --adapter examples/adapters/openziti/capability.yaml
 
 # Export a standalone KLIQ RuntimePolicyPack
 ./bin/forge export-runtime-policy \
-  --policy examples/policies/investor-apps-access.yaml \
+  --intent /tmp/kernloom-forge/investor-apps/policy-intent.yaml \
   --adapters examples/adapters/ \
   --profiles examples/profiles/ \
   --target openziti-production \
@@ -100,7 +115,7 @@ go test ./...
 # Build a signed KLIQ RuntimeBundle
 ./bin/forge keygen --private /tmp/forge-runtime.key --public /tmp/forge-runtime.pub
 ./bin/forge build-runtime-bundle \
-  --policy examples/policies/investor-apps-access.yaml \
+  --intent /tmp/kernloom-forge/investor-apps/policy-intent.yaml \
   --adapters examples/adapters/ \
   --profiles examples/profiles/ \
   --target openziti-production \
@@ -118,16 +133,15 @@ go test ./...
 # Serve signed RuntimeBundles to managed KLIQ nodes
 ./bin/forge serve \
   --addr :8443 \
-  --policy examples/policies/investor-apps-access.yaml \
+  --intent /tmp/kernloom-forge/investor-apps/policy-intent.yaml \
   --adapters examples/adapters/ \
   --profiles examples/profiles/ \
-  --target openziti-production \
   --signing-key /tmp/forge-runtime.key \
   --enroll-token-store /tmp/forge-enroll-tokens.yaml
 
 # Produce operator reports
 ./bin/forge report \
-  --policy examples/policies/investor-apps-access.yaml \
+  --intent /tmp/kernloom-forge/investor-apps/policy-intent.yaml \
   --adapters examples/adapters/ \
   --profiles examples/profiles/
 
@@ -135,64 +149,77 @@ go test ./...
 ./bin/forge conformance-fixtures --output /tmp/kernloom-conformance
 ```
 
-Add `--guardrail <GuardrailPolicy.yaml>` to `export-runtime-policy`,
-`build-runtime-bundle`, or `serve` when the runtime artifact should include
-safety invariants such as "never auto-block admins".
-
-Add `--detection <DetectionPolicy.yaml>`, `--response <ResponsePolicy.yaml>`,
-and `--alert-route <AlertRoute.yaml>` when the runtime artifact should carry
-detection rules, response rules and routed alerts.
+The generated `PolicyIntent` is the normal Forge input. Low-level flags such as
+`--policy`, `--guardrail`, `--detection`, `--response`, and `--alert-route`
+remain available for fixture debugging and generated artifact inspection.
 
 ---
 
 ## Key concepts
 
-### AccessPolicy — vendor-neutral intent
+### Natural Intent — human authoring surface
 
-```yaml
-apiVersion: kernloom.io/v1
-kind: AccessPolicy
-metadata:
-  name: investor-apps-access
-spec:
-  subject:
-    type: role
-    ref: investors
-  resource:
-    type: application_group
-    ref: investor-apps
-  conditions:
-    - id: require-mfa
-      type: authentication_strength
-      signal: session.authentication.strength
-      operator: eq
-      value: mfa
-      cel: "session.authentication.strength == 'mfa'"
-    - id: require-low-risk
-      type: risk_level
-      signal: subject.risk.level
-      operator: eq
-      value: low
-  effect: allow
-```
-
-Conditions support both CEL expressions and structured `signal/operator/value`
-format. The policy kind, selectors, condition types, operators and effects are
-defined by `github.com/kernloom/kernloom-registries/registries/policy`.
-
-### Natural policy intent
-
-Forge includes a small natural intent converter. It is a convenience layer.
-Forge still plans from canonical `AccessPolicy` YAML:
+Operators should normally author policy in `.intent` files:
 
 ```text
-protect "ziti-controller"
-allow group "kernloom-admins" to access "ziti-controller"
-require "subject.risk.level" eq "low"
-require "session.authentication.strength" in ["mfa", "phishing_resistant_mfa"]
-default deny access to "ziti-controller"
-when denied access to "ziti-controller" exceeds 5 within 15m then alert route "security-ops" severity "medium" dedupe 15m
-never auto_block group "kernloom-admins"
+intent "investor-apps-access"
+
+protect application_group "investor-apps" in "production"
+
+compose:
+  access "investor-apps-access"
+  requirements "investor-apps-context"
+  detection "investor-apps-runtime-detections"
+  response "investor-apps-runtime-responses"
+  alert_route "security-ops"
+
+access "investor-apps-access":
+  default deny access to application_group "investor-apps"
+  allow role "investors" to access application_group "investor-apps"
+
+requirements "investor-apps-context":
+  require "session.authentication.strength" in ["mfa", "phishing_resistant_mfa"]
+  require "subject.risk.level" eq "low"
+```
+
+Forge converts that text into canonical policy documents. Those generated
+documents are the stable machine contract; humans should not have to hand-write
+the YAML in normal workflows.
+
+### Generated PolicyIntent And Canonical Documents
+
+Natural Intent may also describe detections, routed alerts and guardrails:
+
+```text
+intent "protect-ziti-controller-admin-access"
+
+protect "ziti-controller" in "production"
+
+access "ziti-controller-admin-access":
+  default deny access to "ziti-controller"
+  allow group "kernloom-admins" to access "ziti-controller"
+
+requirements "low-risk-strong-auth":
+  require "subject.risk.level" eq "low"
+  require "session.authentication.strength" in ["mfa", "phishing_resistant_mfa"]
+
+detection "ziti-controller-denied-access":
+  detect "unknown-source-heavy-deny":
+    when denied access to "ziti-controller" by unknown source exceeds 20 within 15m
+
+response "ziti-controller-deny-escalation":
+  on "unknown-source-heavy-deny" then rate_limit source for 15m
+
+guardrail "never-autoblock-kernloom-admins":
+  never auto_block group "kernloom-admins"
+
+capabilities "ziti-controller-admin-protection":
+  require context "subject.risk.level"
+  require windowed_detection
+  require traffic_rate_limit
+
+gap_handling:
+  fail on missing_context
 ```
 
 Quotes are optional around simple variable values and useful to show which
@@ -200,44 +227,40 @@ tokens are data rather than language.
 
 `alert` is a routed notification action. It must name an `AlertRoute`, a
 severity, and a dedupe window. Technical response actions include `rate_limit`,
-`deny`, `network_deny`, `drop`, `tarpit`, and `quarantine`, or their canonical
-IDs from the registry.
+`deny`, `network_deny`, `drop`, `tarpit`, `temporary_block`, and `quarantine`,
+or their canonical IDs from the registry. `capabilities` and `gap_handling`
+emit a referenced `CapabilityRequirement` document.
 
-Convert that text to YAML:
+For managed KLIQ, `forge serve` can omit `--target`. Forge then uses the
+enrolled node's reported adapter and capabilities to choose the deployable
+target pack. Use `--target` for a forced single target, or `--assignments` when
+you need explicit node selection. Assignment selectors can match node IDs,
+adapters, capabilities, and inventory labels such as `role=edge-gateway`,
+`env=production`, or `service=payment-api`.
+
+Convert that text to canonical documents plus a digest-pinned manifest:
 
 ```bash
 ./bin/forge intent convert \
   --input examples/policies/protect-ziti-controller.intent \
-  --output /tmp/protect-ziti-controller.yaml \
-  --guardrails-output /tmp/protect-ziti-controller-guardrails.yaml \
-  --detection-output /tmp/protect-ziti-controller-detections.yaml \
-  --response-output /tmp/protect-ziti-controller-responses.yaml \
-  --owner security
+  --output-dir /tmp/kernloom-forge/protect-ziti-controller \
+  --emit-policy-intent \
+  --owner security \
+  --compile-target klshield-local
 ```
 
-Current limits:
+That output directory contains `policy-intent.yaml` plus generated canonical
+documents such as `access.yaml`, `detections.yaml`, `responses.yaml`,
+`guardrails.yaml`, `capabilities.yaml`, and `security-ops-alert-route.yaml`. `default deny` is
+recognized and reported as a warning for now; it will become its own target
+default/runtime-default IR instead of being hidden in `AccessPolicy`.
 
-- `protect`, `allow` and `require` are emitted into `AccessPolicy`.
-- `never ...` can be emitted into a separate `GuardrailPolicy` with
-  `--guardrails-output`.
-- `when ...` can be emitted into a separate `DetectionPolicy` with
-  `--detection-output`.
-- `when ... then alert route ...` can be emitted into a separate
-  `ResponsePolicy` with `--response-output`.
-- `default deny` is recognized and reported as a warning for now.
-- Alert delivery is defined separately with `AlertRoute`.
+The generated `PolicyIntent` then moves through:
 
-The generated YAML can then move through:
-
-1. an `AccessPolicy` YAML document for the access intent;
-2. an optional `GuardrailPolicy` YAML document for safety invariants;
-3. an optional `DetectionPolicy` YAML document for stateful runtime detections;
-4. an optional `ResponsePolicy` YAML document for response actions;
-5. optional `AlertRoute` YAML documents for notification routing;
-6. an `EnforcementPlan` for operator review;
-7. a `RuntimePolicyPack` for standalone KLIQ via `export-runtime-policy`;
-8. a signed `RuntimeBundle` for managed KLIQ via `build-runtime-bundle` or
-   `serve`.
+1. `forge intent validate` for digest, kind and cross-reference checks;
+2. `forge compile` / `forge report` for operator review;
+3. `forge export-runtime-policy` for standalone KLIQ via `--policy-file`;
+4. `forge build-runtime-bundle` or `forge serve` for managed KLIQ.
 
 The importer is a thin parser/converter, not a second policy model.
 
@@ -320,10 +343,10 @@ kernloom-forge/
 │   │   ├── klshield/              capability.yaml, mappings.yaml, actions.yaml
 │   │   └── netfilter/             capability.yaml, mappings.yaml
 │   ├── profiles/                  openziti-production.yaml, openziti-config-only.yaml, ...
-│   └── policies/                  investor-apps-access.yaml
+│   └── policies/                  *.intent authoring examples + generated YAML fixtures
 ├── pkg/
 │   ├── core/
-│   │   ├── intent/                AccessPolicy, PolicyEnvelope
+│   │   ├── intent/                AccessPolicy, PolicyIntent, PolicyEnvelope
 │   │   ├── requirement/           RequirementSet, CEL + structured conditions
 │   │   ├── adapter/               AdapterCapabilityManifest
 │   │   ├── profile/               TargetIntegrationProfile

@@ -1,10 +1,10 @@
 github.com/cpuguy83/go-md2man/v2 v2.0.6/go.mod h1:oOW0eioCTA6cOiMLiUPZOpcVxMig6NIQQ7OS05n1F4g=
 github.com/inconshreveable/mousetrap v1.1.0 h1:wN+x4NVGpMsO7ErUn/mUI3vEoE6Jt13X2s0bqwp9tc8=
 github.com/inconshreveable/mousetrap v1.1.0/go.mod h1:vpF70FUmC8bwa3OWnCshd2FqLfsEA9PFc4w1p2J65bw=
-github.com/kernloom/kernloom-contracts v0.3.2 h1:Q302Pv0F59tiuiww1mgZrUR138zFnkxRaXzj4YWmam4=
-github.com/kernloom/kernloom-contracts v0.3.2/go.mod h1:MivRdravn+GJYmQgC5j2wjTsHaN2lWFnxEVm9hwoui8=
-github.com/kernloom/kernloom-registries v0.3.2 h1:hUDaMNSKL+Da0+Q+WaFJk9UqOgGKD4KE7CopUyF+FgI=
-github.com/kernloom/kernloom-registries v0.3.2/go.mod h1:wq5tmNUweFcBl2Gv4cudgV22O/bEzCA4Udv43+4IsWM=
+github.com/kernloom/kernloom-contracts v0.4.0 h1:0jWa+6NrAbKyn73EIbCseGYrnfYwQ6gv9YZxLdvIfnw=
+github.com/kernloom/kernloom-contracts v0.4.0/go.mod h1:MivRdravn+GJYmQgC5j2wjTsHaN2lWFnxEVm9hwoui8=
+github.com/kernloom/kernloom-registries v0.4.0 h1:ApDDJ3dpNTiudolsn1x6bNQLV6cK0vJxXwV828c54eA=
+github.com/kernloom/kernloom-registries v0.4.0/go.mod h1:klmAAOWNcPrY94z99eXJKCJ6C+83gWGUsZj1uYwxtbQ=
 github.com/russross/blackfriday/v2 v2.1.0/go.mod h1:+Rmxgy9KzJVeS9/2gXHxylqXiyQDYRxCVz55jmeOWTM=
 github.com/spf13/cobra v1.10.2 h1:DMTTonx5m65Ic0GOoRY2c16WCbHxOOw6xxezuLaBpcU=
 github.com/spf13/cobra v1.10.2/go.mod h1:7C1pvHqHw5A4vrJfjNwvOdzYu0Gml16OCs2GRiTUUS4=

@@ -16,6 +16,7 @@
 //
 // Current kinds:
 //   - AccessPolicy  — who may access what under which conditions
+//   - PolicyIntent  — thin manifest that composes canonical policy documents
 //
 // Planned kinds (not yet implemented):
 //   - NetworkPolicy    — traffic rules between services/segments
@@ -37,6 +38,7 @@ type PolicyKind = string
 
 const (
 	KindAccessPolicy    PolicyKind = "AccessPolicy"
+	KindPolicyIntent    PolicyKind = "PolicyIntent"
 	KindNetworkPolicy   PolicyKind = "NetworkPolicy"   // planned
 	KindAdmissionPolicy PolicyKind = "AdmissionPolicy" // planned
 	KindDataPolicy      PolicyKind = "DataPolicy"      // planned
@@ -48,6 +50,7 @@ const (
 // Kernloom policy document.
 type PolicyMetadata struct {
 	Name        string            `yaml:"name"`
+	Version     string            `yaml:"version,omitempty"`
 	Owner       string            `yaml:"owner,omitempty"`
 	Environment string            `yaml:"environment,omitempty"`
 	Labels      map[string]string `yaml:"labels,omitempty"`

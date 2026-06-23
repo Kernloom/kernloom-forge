@@ -1,0 +1,16 @@
+apiVersion: kernloom.io/v1
+kind: CapabilityRequirement
+metadata:
+  name: ziti-controller-admin-protection
+spec:
+  required:
+    - context: subject.risk.level
+    - context: session.authentication.strength
+    - feature: windowed_detection
+    - capability: enforce.traffic.rate_limit
+    - capability: enforce.traffic.drop
+  gapHandling:
+    - behavior: fail
+      gap: missing_context
+    - behavior: require_approval
+      gap: identity_to_ip_downgrade
