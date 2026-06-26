@@ -225,7 +225,7 @@ Example files:
 ```bash
 mkdir -p /tmp/kernloom-forge-manual/policies /tmp/kernloom-forge-manual/out
 
-cd /home/adrian/prj/ebpf-security/kernloom-forge
+cd /path/to/kernloom-forge
 mkdir -p bin
 go build -o bin/forge ./cmd/forge
 ```
@@ -233,7 +233,7 @@ go build -o bin/forge ./cmd/forge
 Optionally build KLIQ:
 
 ```bash
-cd /home/adrian/prj/ebpf-security/kernloom
+cd /path/to/kernloom
 mkdir -p bin
 go build -o bin/kliq ./iq/cmd/kliq
 ```
@@ -245,7 +245,7 @@ two compensating runtime rules. Write it as Natural Intent and let Forge emit
 the canonical documents.
 
 ```bash
-cd /home/adrian/prj/ebpf-security/kernloom-forge
+cd /path/to/kernloom-forge
 
 cat > /tmp/kernloom-forge-manual/policies/manual-edge-access.intent <<'EOF'
 intent "manual-edge-access"
@@ -448,7 +448,7 @@ in the Forge report and must not silently become a hard runtime block.
 No-root smoke test without an adapter:
 
 ```bash
-cd /home/adrian/prj/ebpf-security/kernloom
+cd /path/to/kernloom
 
 timeout 12s ./bin/kliq run \
   --adapter=none \
@@ -497,7 +497,7 @@ RuntimePolicyPack handoff.
 Create keys:
 
 ```bash
-cd /home/adrian/prj/ebpf-security/kernloom-forge
+cd /path/to/kernloom-forge
 
 ./bin/forge keygen \
   --private /tmp/kernloom-forge-manual/out/forge-runtime.key \
@@ -566,7 +566,7 @@ Start KLIQ in managed mode. Replace `PASTE_ENROLL_TOKEN_HERE` with the token
 printed by `forge enroll-token create`:
 
 ```bash
-cd /home/adrian/prj/ebpf-security/kernloom
+cd /path/to/kernloom
 
 timeout 30s ./bin/kliq run \
   --adapter=none \
@@ -610,7 +610,7 @@ used/unused token state on disk.
 Investor example:
 
 ```bash
-cd /home/adrian/prj/ebpf-security/kernloom-forge
+cd /path/to/kernloom-forge
 
 ./bin/forge intent convert \
   --input examples/policies/investor-apps-access.intent \
