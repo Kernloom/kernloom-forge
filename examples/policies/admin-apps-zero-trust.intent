@@ -28,10 +28,10 @@ requirements "admin-apps-context":
 
 detection "admin-apps-runtime-detections":
   detect "admin-risk-medium":
-    when risk equals medium
+    when "runtime.risk.level" equals medium
 
   detect "admin-risk-high":
-    when risk in ["high", "critical"]
+    when "runtime.risk.level" in ["high", "critical"]
 
   detect "non-admin-deny-burst":
     when denied access to application_group "admin-apps" by known subject excluding group "company-admins" exceeds 5 within 15m
@@ -39,11 +39,17 @@ detection "admin-apps-runtime-detections":
   detect "unknown-source-deny-burst":
     when denied access to application_group "admin-apps" by unknown source exceeds 20 within 15m
 
+  detect "sustained-admin-pressure":
+    when rate_limit drops to application_group "admin-apps" by unknown source sustained for 5m
+
 response "admin-apps-runtime-responses":
   on "admin-risk-medium" then alert route "security-ops" severity "medium" dedupe 15m
   on "admin-risk-medium" then rate_limit source for 15m
-  on "admin-risk-high" then deny source for 5m
-  on "unknown-source-deny-burst" then temporary_block source for 10m
+  on "admin-risk-high" then rate_limit source for 5m
+  on "unknown-source-deny-burst" then rate_limit source for 10m
+  on "sustained-admin-pressure" then temporary_block source for 10m
+    require previous action "enforce.traffic.rate_limit" active
+    allow local enforcement state evidence
     require enforcement target excludes group "breakglass-admins"
 
 alert_route "security-ops":
@@ -60,7 +66,6 @@ guardrail "protect-breakglass-admins":
   never disable identity group "breakglass-admins"
 
 capabilities "admin-apps-runtime-capabilities":
-  require identity_based_access
   require context "session.authentication.strength"
   require context "subject.risk.level"
   require context "device.management.status"

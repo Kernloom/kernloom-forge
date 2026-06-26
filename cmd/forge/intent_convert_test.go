@@ -61,7 +61,7 @@ func TestIntentConvertOutputDirEmitsPolicyIntent(t *testing.T) {
 	if len(comp.DetectionRules) != 2 {
 		t.Fatalf("detections = %d", len(comp.DetectionRules))
 	}
-	if len(comp.ResponseRules) != 2 {
+	if len(comp.ResponseRules) != 4 {
 		t.Fatalf("responses = %d", len(comp.ResponseRules))
 	}
 	if len(comp.AlertRoutes) != 1 || comp.AlertRoutes[0].ID != "alert-route.security-ops" {

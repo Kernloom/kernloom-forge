@@ -58,6 +58,7 @@ func exportRuntimePolicyCmd() *cobra.Command {
 				IssuedAt:          time.Now().UTC(),
 				DefaultTTL:        ttl,
 				Guardrails:        comp.Guardrails,
+				AccessPolicies:    runtimeAccessPoliciesFromComposition(comp),
 				DetectionRules:    comp.DetectionRules,
 				ResponseRules:     comp.ResponseRules,
 				AlertRoutes:       comp.AlertRoutes,
@@ -119,6 +120,7 @@ func buildRuntimeBundleCmd() *cobra.Command {
 				FailoverBehavior:  failover,
 				DefaultTTL:        ttl,
 				Guardrails:        comp.Guardrails,
+				AccessPolicies:    runtimeAccessPoliciesFromComposition(comp),
 				DetectionRules:    comp.DetectionRules,
 				ResponseRules:     comp.ResponseRules,
 				AlertRoutes:       comp.AlertRoutes,
@@ -588,8 +590,15 @@ func applyCapabilityRequirementsToPlans(comp *policyComposition, plans []*plan.E
 				applyCapabilityRequirementItem(p, prof, comp, requirementName, item)
 			}
 			for _, gap := range req.Spec.GapHandling {
-				if isStrictGapBehavior(gap.Behavior) && planHasCapabilityGap(comp, p, gap.Gap) {
-					markPlanCapabilityGap(p, "gap-"+gap.Gap, fmt.Sprintf("CapabilityRequirement %q requires %s on %s", requirementName, gap.Behavior, gap.Gap))
+				if !planHasCapabilityGap(comp, p, gap.Gap) {
+					continue
+				}
+				note := fmt.Sprintf("CapabilityRequirement %q requires %s on %s", requirementName, gap.Behavior, gap.Gap)
+				switch {
+				case isBlockingGapBehavior(gap.Behavior):
+					markPlanCapabilityGap(p, "gap-"+gap.Gap, note)
+				case isReviewGapBehavior(gap.Behavior):
+					markPlanCapabilityReviewGap(p, "gap-"+gap.Gap, note)
 				}
 			}
 		}
@@ -740,9 +749,18 @@ func compositionAccessSubjectsAllAny(comp *policyComposition) bool {
 	return true
 }
 
-func isStrictGapBehavior(value string) bool {
+func isBlockingGapBehavior(value string) bool {
 	switch strings.ReplaceAll(strings.ToLower(strings.TrimSpace(value)), "-", "_") {
-	case "fail", "fail_closed", "require_approval", "require_review":
+	case "fail", "fail_closed":
+		return true
+	default:
+		return false
+	}
+}
+
+func isReviewGapBehavior(value string) bool {
+	switch strings.ReplaceAll(strings.ToLower(strings.TrimSpace(value)), "-", "_") {
+	case "require_approval", "require_review":
 		return true
 	default:
 		return false
@@ -768,6 +786,27 @@ func markPlanCapabilityGap(p *plan.EnforcementPlan, id, note string) {
 	})
 	p.Spec.Summary.Deployable = false
 	p.Spec.Summary.Unsupported = appendUniquePlanString(p.Spec.Summary.Unsupported, id)
+}
+
+func markPlanCapabilityReviewGap(p *plan.EnforcementPlan, id, note string) {
+	if p == nil {
+		return
+	}
+	id = "capability-requirement-" + sanitizePlanID(id)
+	for _, existing := range p.Spec.Requirements {
+		if existing.ID == id {
+			return
+		}
+	}
+	p.Spec.Requirements = append(p.Spec.Requirements, plan.RequirementEnforcement{
+		ID:              id,
+		RequirementKind: "capability_requirement",
+		Requirement:     note,
+		Status:          plan.StatusPartial,
+		Fidelity:        "low",
+		RuntimeNotes:    []string{note},
+	})
+	p.Spec.Summary.Downgrades = appendUniquePlanString(p.Spec.Summary.Downgrades, id)
 }
 
 func appendUniquePlanString(values []string, value string) []string {

@@ -210,7 +210,6 @@ func klshieldLocalProfile() *profile.TargetIntegrationProfile {
 			AllowedRuntimeActions: []string{
 				"network.flow_deny",
 				"network.flow_rate_limit",
-				"network.cgroup_block",
 			},
 		},
 	}
@@ -374,11 +373,11 @@ func klshieldBundle() *compiler.TargetBundle {
 			Spec: mapping.MappingSetSpec{
 				Mappings: []mapping.MappingEntry{
 					{Requirement: mapping.RequirementRef{Kind: "subject_identity"},
-						Capability: mapping.CapabilityRef{ID: "identity.process_cgroup"},
+						Capability: mapping.CapabilityRef{ID: "network.flow_control"},
 						Support:    mapping.SupportPartial, Fidelity: mapping.FidelityLow,
 						Downgrade: &mapping.DowngradeNote{
-							From: "Enterprise role identity", To: "Local process/cgroup identity",
-							Reason: "eBPF tracks local processes; enterprise roles require IdP"}},
+							From: "Enterprise role identity", To: "Source IP / network-flow identity observed at XDP",
+							Reason: "KLShield runs at XDP and cannot observe process, cgroup, or enterprise directory identity"}},
 					{Requirement: mapping.RequirementRef{Kind: "resource_identity"},
 						Capability: mapping.CapabilityRef{ID: "network.flow_control"},
 						Support:    mapping.SupportPartial, Fidelity: mapping.FidelityMedium,
@@ -388,12 +387,12 @@ func klshieldBundle() *compiler.TargetBundle {
 					{Requirement: mapping.RequirementRef{Kind: "auth_strength"},
 						Support: mapping.SupportUnsupported},
 					{Requirement: mapping.RequirementRef{Kind: "risk_level"},
-						Capability: mapping.CapabilityRef{ID: "network.flow_deny"},
+						Capability: mapping.CapabilityRef{ID: "network.flow_rate_limit"},
 						Support:    mapping.SupportCompensatingControl, Fidelity: mapping.FidelityHigh,
 						Binding: &mapping.CompensatingBinding{
 							RiskAssessmentOwner: "kernloom-risk-engine",
 							DecisionOwner:       "kernloom-runtime-pdp",
-							Action:              "network.flow_deny",
+							Action:              "network.flow_rate_limit",
 						}},
 					{Requirement: mapping.RequirementRef{Kind: "device_posture"},
 						Capability: mapping.CapabilityRef{ID: "network.flow_deny"},
@@ -424,10 +423,6 @@ func klshieldBundle() *compiler.TargetBundle {
 						RevertStrategy: action.RevertStrategy{Type: action.RevertRestorePreviousState},
 						ConflictPolicy: action.ConflictPolicy{Type: action.ConflictStrongestRestrictionWins}},
 					{ID: "network.flow_rate_limit", Effect: action.EffectRestrictive, Scope: "flow",
-						Requirements:   action.ActionRequirements{TTL: action.LevelRequired},
-						RevertStrategy: action.RevertStrategy{Type: action.RevertRestorePreviousState},
-						ConflictPolicy: action.ConflictPolicy{Type: action.ConflictStrongestRestrictionWins}},
-					{ID: "network.cgroup_block", Effect: action.EffectRestrictive, Scope: "cgroup",
 						Requirements:   action.ActionRequirements{TTL: action.LevelRequired},
 						RevertStrategy: action.RevertStrategy{Type: action.RevertRestorePreviousState},
 						ConflictPolicy: action.ConflictPolicy{Type: action.ConflictStrongestRestrictionWins}},

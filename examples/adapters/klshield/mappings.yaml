@@ -8,13 +8,13 @@ spec:
     - requirement:
         kind: subject_identity
       capability:
-        id: identity.process_cgroup
+        id: network.flow_control
       support: partial
       fidelity: low
       downgrade:
         from: Enterprise role identity (e.g. "investors" from IdP directory).
-        to: Local process/cgroup identity (UID, cgroup path, PID).
-        reason: eBPF tracks local processes; enterprise roles require IdP.
+        to: Source IP / network-flow identity observed at XDP.
+        reason: KLShield runs at XDP and cannot observe process, cgroup, or enterprise directory identity.
 
     - requirement:
         kind: resource_identity
@@ -29,10 +29,6 @@ spec:
 
     - requirement:
         kind: auth_strength
-      support: unsupported
-
-    - requirement:
-        kind: risk_level
       capability:
         id: network.flow_deny
       support: compensating_control
@@ -41,6 +37,17 @@ spec:
         riskAssessmentOwner: kernloom-risk-engine
         decisionOwner: kernloom-runtime-pdp
         action: network.flow_deny
+
+    - requirement:
+        kind: risk_level
+      capability:
+        id: network.flow_rate_limit
+      support: compensating_control
+      fidelity: high
+      binding:
+        riskAssessmentOwner: kernloom-risk-engine
+        decisionOwner: kernloom-runtime-pdp
+        action: network.flow_rate_limit
 
     - requirement:
         kind: device_posture
@@ -55,7 +62,14 @@ spec:
 
     - requirement:
         kind: session_context
-      support: unsupported
+      capability:
+        id: network.flow_deny
+      support: compensating_control
+      fidelity: high
+      binding:
+        riskAssessmentOwner: kernloom-risk-engine
+        decisionOwner: kernloom-runtime-pdp
+        action: network.flow_deny
 
     - requirement:
         kind: network_tuple

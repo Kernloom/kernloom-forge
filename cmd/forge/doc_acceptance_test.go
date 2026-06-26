@@ -41,6 +41,7 @@ func TestDocAcceptanceManualEdgeNaturalIntentToRuntimePolicyPack(t *testing.T) {
 		IssuedAt:       time.Date(2026, 6, 22, 12, 0, 0, 0, time.UTC),
 		DefaultTTL:     30 * time.Second,
 		Guardrails:     comp.Guardrails,
+		AccessPolicies: runtimeAccessPoliciesFromComposition(comp),
 		DetectionRules: comp.DetectionRules,
 		ResponseRules:  comp.ResponseRules,
 		AlertRoutes:    comp.AlertRoutes,
@@ -53,6 +54,9 @@ func TestDocAcceptanceManualEdgeNaturalIntentToRuntimePolicyPack(t *testing.T) {
 	}
 	if len(pack.Spec.Guardrails) == 0 {
 		t.Fatalf("runtime guardrails missing")
+	}
+	if len(pack.Spec.AccessPolicies) == 0 {
+		t.Fatalf("runtime access policies missing")
 	}
 	if len(pack.Spec.GapMetadata) == 0 {
 		t.Fatalf("runtime gap metadata missing")

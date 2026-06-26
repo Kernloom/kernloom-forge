@@ -22,16 +22,15 @@ access "production-database-access":
 requirements "production-database-context":
   require "subject.risk.level" eq "low"
   require "workload.attestation.status" eq "attested"
-  require "workload.environment" eq "production"
   require "resource.data_class" eq "restricted"
   require "resource.criticality" eq "critical"
 
 detection "production-database-runtime-detections":
   detect "database-risk-medium":
-    when risk equals medium
+    when "runtime.risk.level" equals medium
 
   detect "database-risk-high":
-    when risk in ["high", "critical"]
+    when "runtime.risk.level" in ["high", "critical"]
 
   detect "unknown-source-deny-burst":
     when denied access to database "customer-prod-db" by unknown source exceeds 5 within 10m
@@ -42,7 +41,8 @@ detection "production-database-runtime-detections":
 response "production-database-runtime-responses":
   on "database-risk-medium" then alert route "platform-ops" severity "medium" dedupe 15m
   on "database-risk-medium" then rate_limit source for 10m
-  on "database-risk-high" then deny source for 5m
+  on "database-risk-high" then rate_limit source for 5m
+  on "unknown-source-deny-burst" then rate_limit source for 10m
   on "sustained-database-pressure" then temporary_block source for 10m
     require previous action "enforce.traffic.rate_limit" active
     allow local enforcement state evidence
@@ -61,10 +61,8 @@ guardrail "protect-database-admins":
   never disable identity group "database-admins"
 
 capabilities "production-database-runtime-capabilities":
-  require identity_based_access
   require context "subject.risk.level"
   require context "workload.attestation.status"
-  require context "workload.environment"
   require context "resource.data_class"
   require context "resource.criticality"
   require windowed_detection

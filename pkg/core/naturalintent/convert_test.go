@@ -242,7 +242,7 @@ response "runtime":
 		t.Fatalf("detection rules = %#v", result.DetectionRules)
 	}
 	for _, rule := range result.DetectionRules {
-		if got := rule.Params["key"]; got != "subject.risk.level" {
+		if got := rule.Params["key"]; got != "runtime.risk.level" {
 			t.Fatalf("detection key = %#v", got)
 		}
 		if got := rule.Params["operator"]; got != "in" {
@@ -265,9 +265,46 @@ when risk at least high then deny source for 5m
 	if len(inline.DetectionRules) != 1 {
 		t.Fatalf("inline detection rules = %#v", inline.DetectionRules)
 	}
+	if got := inline.DetectionRules[0].Params["key"]; got != "runtime.risk.level" {
+		t.Fatalf("inline detection key = %#v", got)
+	}
 	values, ok := inline.DetectionRules[0].Params["value"].([]string)
 	if !ok || len(values) != 2 || values[0] != "high" || values[1] != "critical" {
 		t.Fatalf("inline detection value = %#v", inline.DetectionRules[0].Params["value"])
+	}
+}
+
+func TestConvertAlertRouteFileChannel(t *testing.T) {
+	result, err := Convert([]byte(`
+intent "file-alert"
+protect "ziti-controller"
+allow all
+
+detection "risk-detections":
+  detect "risk-high":
+    when risk at least high
+
+response "risk-alerts":
+  on "risk-high" then alert route "security-ops" severity "high" dedupe 5m
+
+alert_route "security-ops":
+  notify group "kernloom-security-ops"
+  via ["file"]
+`), Options{EmitDetectionIR: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.AlertRoutes) != 1 {
+		t.Fatalf("alert routes = %#v", result.AlertRoutes)
+	}
+	if len(result.AlertRoutes[0].Channels) != 1 {
+		t.Fatalf("channels = %#v", result.AlertRoutes[0].Channels)
+	}
+	if got := result.AlertRoutes[0].Channels[0].Type; got != "file" {
+		t.Fatalf("channel type = %q", got)
+	}
+	if got := result.AlertRoutes[0].Channels[0].Ref; got != "file.security-ops" {
+		t.Fatalf("channel ref = %q", got)
 	}
 }
 

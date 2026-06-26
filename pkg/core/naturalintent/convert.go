@@ -527,6 +527,9 @@ func validateDetectionRule(reg naturalRegistry, rule contracts.RuntimeDetectionR
 		if contextKey, ok := reg.ContextKeys[key]; ok {
 			return validateConditionValue(contextKey, stringParam(rule.Params, "operator", "op"), rule.Params["value"])
 		}
+		if isRuntimeRiskDetectionKey(key) {
+			return validateRuntimeRiskDetectionValue(key, rule.Params["value"])
+		}
 		if reg.Signals[key] {
 			return nil
 		}
@@ -541,6 +544,50 @@ func validateDetectionRule(reg naturalRegistry, rule contracts.RuntimeDetectionR
 		}
 	}
 	return nil
+}
+
+func isRuntimeRiskDetectionKey(key string) bool {
+	switch strings.TrimSpace(key) {
+	case "runtime.risk.level", "runtime.risk.score":
+		return true
+	default:
+		return false
+	}
+}
+
+func validateRuntimeRiskDetectionValue(key string, value any) error {
+	switch key {
+	case "runtime.risk.score":
+		if runtimeRiskNumericValue(value) {
+			return nil
+		}
+		return fmt.Errorf("runtime.risk.score requires a numeric value")
+	case "runtime.risk.level":
+		values := valueStrings(value)
+		if len(values) == 0 {
+			return fmt.Errorf("runtime.risk.level requires a risk level value")
+		}
+		for _, level := range values {
+			switch strings.TrimSpace(level) {
+			case "low", "medium", "high", "critical":
+			default:
+				return fmt.Errorf("runtime.risk.level value %q must be one of low, medium, high, critical", level)
+			}
+		}
+	}
+	return nil
+}
+
+func runtimeRiskNumericValue(value any) bool {
+	switch typed := value.(type) {
+	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64:
+		return true
+	case string:
+		_, err := strconv.ParseFloat(strings.TrimSpace(typed), 64)
+		return err == nil
+	default:
+		return false
+	}
 }
 
 func validateConditionValue(key contracts.ContextKeyEntry, operator string, value any) error {
@@ -1114,18 +1161,29 @@ func expandNaturalConditionTokens(tokens []string) []string {
 			continue
 		}
 		signalTokens := tokens[:i]
-		if normalizeSignal(signalTokens) != "subject.risk.level" {
+		signal := normalizeDetectionSignal(signalTokens)
+		if signal != "runtime.risk.level" && signal != "subject.risk.level" {
 			return tokens
 		}
 		level := strings.Join(tokens[i+2:], " ")
 		values := riskLevelsAtLeast(level)
 		out := make([]string, 0, len(signalTokens)+1+len(values))
-		out = append(out, signalTokens...)
+		out = append(out, signal)
 		out = append(out, "in")
 		out = append(out, values...)
 		return out
 	}
 	return tokens
+}
+
+func normalizeDetectionSignal(tokens []string) string {
+	raw := strings.Join(tokens, " ")
+	switch raw {
+	case "risk", "runtime risk", "runtime risk level":
+		return "runtime.risk.level"
+	default:
+		return normalizeSignal(tokens)
+	}
 }
 
 func riskLevelsAtLeast(level string) []string {
@@ -1639,6 +1697,10 @@ func alertChannelRef(channelType, routeID string) string {
 		return "log." + short
 	case "email":
 		return "channel." + short
+	case "file":
+		return "file." + short
+	case "jsonl":
+		return "jsonl." + short
 	default:
 		return "channel." + short
 	}
@@ -1936,6 +1998,7 @@ func conditionTypeForSignal(signal string) string {
 		return "risk_level"
 	case strings.HasPrefix(signal, "device.posture"),
 		strings.HasPrefix(signal, "device.edr"),
+		strings.HasPrefix(signal, "device.management"),
 		strings.HasPrefix(signal, "device.attestation"),
 		strings.HasPrefix(signal, "workload.attestation"):
 		return "device_posture"

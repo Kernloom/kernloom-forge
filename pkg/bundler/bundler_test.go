@@ -31,6 +31,20 @@ func TestBuildPolicyPackUsesKLIQContracts(t *testing.T) {
 			},
 			ForbiddenActions: []string{"enforce.access.deny"},
 		}},
+		AccessPolicies: []contracts.RuntimeAccessPolicy{{
+			ID: "admin-access",
+			Subject: contracts.RuntimeAccessSubject{
+				Type: "group",
+				Ref:  "kernloom-admins",
+			},
+			Action: "access",
+			Resource: contracts.RuntimeAccessResource{
+				Type: "application",
+				Ref:  "ziti-controller",
+			},
+			Effect:        "allow",
+			DefaultEffect: "deny",
+		}},
 		DetectionRules: []contracts.RuntimeDetectionRule{{
 			ID:          "admin-deny",
 			Type:        "access.denied_threshold",
@@ -85,6 +99,12 @@ func TestBuildPolicyPackUsesKLIQContracts(t *testing.T) {
 	}
 	if len(pack.Spec.Guardrails) != 1 {
 		t.Fatalf("guardrails = %d, want 1", len(pack.Spec.Guardrails))
+	}
+	if len(pack.Spec.AccessPolicies) != 1 || pack.Spec.AccessPolicies[0].Resource.Ref != "ziti-controller" {
+		t.Fatalf("access policies not preserved: %#v", pack.Spec.AccessPolicies)
+	}
+	if !containsString(pack.Spec.CapabilitiesRequired, "access.policy.apply") {
+		t.Fatalf("access capability missing: %#v", pack.Spec.CapabilitiesRequired)
 	}
 	if pack.Spec.Guardrails[0].Subject.Ref != "kernloom-admins" {
 		t.Fatalf("guardrail not preserved: %#v", pack.Spec.Guardrails[0])

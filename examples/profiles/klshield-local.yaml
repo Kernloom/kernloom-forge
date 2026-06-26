@@ -44,4 +44,3 @@ spec:
   allowedRuntimeActions:
     - network.flow_deny
     - network.flow_rate_limit
-    - network.cgroup_block

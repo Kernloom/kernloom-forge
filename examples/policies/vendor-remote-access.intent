@@ -20,7 +20,6 @@ access "vendor-remote-access":
   allow external_partner "approved-vendors" to access application_group "vendor-portal"
 
 requirements "vendor-remote-context":
-  require "subject.type" eq "external_partner"
   require "subject.risk.level" eq "low"
   require "session.authentication.strength" in ["mfa", "phishing_resistant_mfa"]
   require "session.network_zone" eq "zero_trust_overlay"
@@ -28,10 +27,10 @@ requirements "vendor-remote-context":
 
 detection "vendor-remote-runtime-detections":
   detect "vendor-risk-medium":
-    when risk equals medium
+    when "runtime.risk.level" equals medium
 
   detect "vendor-risk-high":
-    when risk in ["high", "critical"]
+    when "runtime.risk.level" in ["high", "critical"]
 
   detect "unknown-source-deny-burst":
     when denied access to application_group "vendor-portal" by unknown source exceeds 10 within 15m
@@ -39,11 +38,17 @@ detection "vendor-remote-runtime-detections":
   detect "scan-suspected":
     when signal "source.scan_suspected" score gte 0.8
 
+  detect "sustained-vendor-pressure":
+    when rate_limit drops to application_group "vendor-portal" by unknown source sustained for 5m
+
 response "vendor-remote-runtime-responses":
   on "vendor-risk-medium" then alert route "security-ops" severity "medium" dedupe 15m
-  on "vendor-risk-high" then deny source for 5m
+  on "vendor-risk-high" then rate_limit source for 5m
   on "scan-suspected" then rate_limit source for 15m
-  on "unknown-source-deny-burst" then temporary_block source for 10m
+  on "unknown-source-deny-burst" then rate_limit source for 10m
+  on "sustained-vendor-pressure" then temporary_block source for 10m
+    require previous action "enforce.traffic.rate_limit" active
+    allow local enforcement state evidence
     require enforcement target excludes group "vendor-approvers"
 
 alert_route "security-ops":
@@ -59,8 +64,6 @@ guardrail "protect-vendor-approvers":
   never disable identity group "vendor-approvers"
 
 capabilities "vendor-remote-runtime-capabilities":
-  require identity_based_access
-  require context "subject.type"
   require context "subject.risk.level"
   require context "session.authentication.strength"
   require context "session.network_zone"

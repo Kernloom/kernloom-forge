@@ -27,17 +27,17 @@ requirements "investor-apps-context":
 
 detection "investor-apps-runtime-detections":
   detect "investor-risk-medium":
-    when risk equals medium
+    when "runtime.risk.level" equals medium
 
   detect "investor-risk-high":
-    when risk in ["high", "critical"]
+    when "runtime.risk.level" in ["high", "critical"]
 
   detect "unknown-source-deny-burst":
     when denied access to application_group "investor-apps" by unknown source exceeds 10 within 15m
 
 response "investor-apps-runtime-responses":
   on "investor-risk-medium" then alert route "security-ops" severity "medium" dedupe 15m
-  on "investor-risk-high" then deny source for 5m
+  on "investor-risk-high" then rate_limit source for 5m
   on "unknown-source-deny-burst" then rate_limit source for 15m
 
 alert_route "security-ops":
@@ -53,7 +53,6 @@ guardrail "protect-investor-support":
   never disable identity group "investor-support"
 
 capabilities "investor-apps-runtime-capabilities":
-  require identity_based_access
   require context "session.authentication.strength"
   require context "subject.risk.level"
   require context "device.posture.status"

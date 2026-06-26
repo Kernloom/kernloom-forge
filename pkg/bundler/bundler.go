@@ -37,6 +37,7 @@ type RuntimePolicyConfig struct {
 	DefaultTTL        time.Duration
 	RegistrySnapshot  contracts.RegistrySnapshot
 	Guardrails        []contracts.RuntimeGuardrail
+	AccessPolicies    []contracts.RuntimeAccessPolicy
 	DetectionRules    []contracts.RuntimeDetectionRule
 	ResponseRules     []contracts.RuntimeResponseRule
 	AlertRoutes       []contracts.RuntimeAlertRoute
@@ -60,6 +61,7 @@ type BundleConfig struct {
 	BaselineEnabled        bool
 	GraphEnabled           bool
 	Guardrails             []contracts.RuntimeGuardrail
+	AccessPolicies         []contracts.RuntimeAccessPolicy
 	DetectionRules         []contracts.RuntimeDetectionRule
 	ResponseRules          []contracts.RuntimeResponseRule
 	AlertRoutes            []contracts.RuntimeAlertRoute
@@ -113,6 +115,7 @@ func BuildPolicyPack(ep *plan.EnforcementPlan, prof *profile.TargetIntegrationPr
 		Spec: contracts.RuntimePolicyPackSpec{
 			DefaultEffect:     defaultEffect,
 			Guardrails:        append([]contracts.RuntimeGuardrail(nil), cfg.Guardrails...),
+			AccessPolicies:    append([]contracts.RuntimeAccessPolicy(nil), cfg.AccessPolicies...),
 			DetectionRules:    append([]contracts.RuntimeDetectionRule(nil), cfg.DetectionRules...),
 			ResponseRules:     append([]contracts.RuntimeResponseRule(nil), cfg.ResponseRules...),
 			AlertRoutes:       append([]contracts.RuntimeAlertRoute(nil), cfg.AlertRoutes...),
@@ -159,6 +162,10 @@ func BuildPolicyPack(ep *plan.EnforcementPlan, prof *profile.TargetIntegrationPr
 	}
 	addResponseCapabilities(&pack)
 	addAutonomyLifecycleCapabilities(&pack)
+	if len(pack.Spec.AccessPolicies) > 0 {
+		addCapability(&pack, "access.policy.apply")
+		addCapability(&pack, "access.policy.drift_check")
+	}
 
 	snapshot, err := validationSnapshot(cfg.RegistrySnapshot)
 	if err != nil {
@@ -226,6 +233,7 @@ func Build(ep *plan.EnforcementPlan, prof *profile.TargetIntegrationProfile, cfg
 		DefaultTTL:        cfg.DefaultTTL,
 		RegistrySnapshot:  registrySnapshot,
 		Guardrails:        cfg.Guardrails,
+		AccessPolicies:    cfg.AccessPolicies,
 		DetectionRules:    cfg.DetectionRules,
 		ResponseRules:     cfg.ResponseRules,
 		AlertRoutes:       cfg.AlertRoutes,
@@ -639,9 +647,9 @@ func directDetectionExpression(detection contracts.RuntimeDetectionRule) string 
 func normalizeRuntimeMetricKey(key string) string {
 	key = strings.TrimSpace(key)
 	switch key {
-	case "risk", "risk.level", "subject.risk.level":
+	case "risk", "risk.level", "runtime.risk.level", "subject.risk.level":
 		return "risk.level"
-	case "risk.score", "subject.risk.score":
+	case "risk.score", "runtime.risk.score", "subject.risk.score":
 		return "risk.score"
 	default:
 		return key

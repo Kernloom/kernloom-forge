@@ -1,6 +1,6 @@
-# Block-based Natural policy intent example.
-# This is the human authoring surface. Convert it to canonical policy documents
-# plus a digest-pinned PolicyIntent before running Forge compile/export paths.
+# KLShield-local Natural policy intent for protecting the OpenZiti controller
+# admin surface. OpenZiti config changes are validated/proposed separately;
+# this runtime pack enforces source/network-flow controls at XDP.
 
 intent "protect-ziti-controller-admin-access"
 
@@ -31,7 +31,9 @@ detection "ziti-controller-denied-access":
     when rate_limit drops to "ziti-controller" by unknown source sustained for 5m
 
 response "ziti-controller-deny-escalation":
+  on "unknown-source-heavy-deny" then alert route "security-ops" severity "medium" dedupe 5m
   on "unknown-source-heavy-deny" then rate_limit source for 15m
+  on "sustained-pressure" then alert route "security-ops" severity "high" dedupe 5m
   on "sustained-pressure" then temporary_block source for 10m
     require previous action "enforce.traffic.rate_limit" active
     allow local enforcement state evidence
@@ -39,7 +41,7 @@ response "ziti-controller-deny-escalation":
 
 alert_route "security-ops":
   notify group "kernloom-security-ops"
-  via ["log", "email"]
+  via ["log", "file"]
   dedupe by ["tenant.id", "resource.id", "detection.id", "source.identity_or_ip"]
   create case false
 

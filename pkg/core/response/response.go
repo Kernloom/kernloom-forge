@@ -1191,7 +1191,7 @@ func validAlertChannelType(snapshot contracts.RegistrySnapshot, value string) bo
 	if len(snapshot.NotificationBindings.Channels) > 0 {
 		return false
 	}
-	return fallbackToken(value, "log", "email")
+	return fallbackToken(value, "log", "email", "file", "jsonl")
 }
 
 func alertChannelRefPrefixes(snapshot contracts.RegistrySnapshot, channelType string) []string {
@@ -1206,6 +1206,10 @@ func alertChannelRefPrefixes(snapshot contracts.RegistrySnapshot, channelType st
 		return []string{"log.", "stdout", "stderr"}
 	case "email":
 		return []string{"channel.", "mailinglist.", "email."}
+	case "file":
+		return []string{"file.", "file://", "./", "../", "/"}
+	case "jsonl":
+		return []string{"jsonl.", "file.", "file://", "./", "../", "/"}
 	default:
 		return nil
 	}

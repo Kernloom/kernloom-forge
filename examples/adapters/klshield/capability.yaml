@@ -12,19 +12,11 @@ spec:
       operations: [block, rate_limit, redirect]
       evaluationOwner: kernloom
       enforcementOwner: kernloom
-    - id: identity.process_cgroup
-      category: identity
-      operations: [read]
-      evaluationOwner: kernloom
     - id: network.flow_deny
       category: runtime_action
       effect: restrictive
       support: unconditional
     - id: network.flow_rate_limit
-      category: runtime_action
-      effect: restrictive
-      support: unconditional
-    - id: network.cgroup_block
       category: runtime_action
       effect: restrictive
       support: unconditional

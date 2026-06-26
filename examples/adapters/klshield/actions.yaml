@@ -30,16 +30,3 @@ spec:
         type: restore_previous_state
       conflictPolicy:
         type: strongest_restriction_wins
-
-    - id: network.cgroup_block
-      effect: restrictive
-      scope: cgroup
-      requirements:
-        ttl: required
-        lease: required
-        audit: required
-        autoRevert: required
-      revertStrategy:
-        type: restore_previous_state
-      conflictPolicy:
-        type: strongest_restriction_wins
